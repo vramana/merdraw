@@ -4,13 +4,15 @@ use merdraw_layout::{LayoutGraph, LayoutNode};
 pub struct AsciiRenderOptions {
     pub max_width: usize,
     pub max_height: usize,
+    pub show_arrows: bool,
 }
 
 impl Default for AsciiRenderOptions {
     fn default() -> Self {
         Self {
-            max_width: 120,
-            max_height: 40,
+            max_width: 80,
+            max_height: 30,
+            show_arrows: true,
         }
     }
 }
@@ -45,6 +47,12 @@ pub fn render_ascii(layout: &LayoutGraph, options: &AsciiRenderOptions) -> Strin
             continue;
         }
         draw_node(&mut grid, node, scale);
+    }
+
+    if options.show_arrows {
+        for edge in &layout.edges {
+            draw_arrow(&mut grid, edge.points.as_slice(), scale);
+        }
     }
 
     grid.into_iter()
@@ -150,4 +158,42 @@ fn merge_char(existing: char, incoming: char) -> char {
         ('+', _) | (_, '+') => '+',
         _ => incoming,
     }
+}
+
+fn draw_arrow(grid: &mut [Vec<char>], points: &[(f32, f32)], scale: f32) {
+    if points.len() < 2 {
+        return;
+    }
+    let (x2, y2) = map_point(points[points.len() - 1], scale);
+    let (x1, y1) = map_point(points[points.len() - 2], scale);
+    let dx = (x2 - x1).signum();
+    let dy = (y2 - y1).signum();
+    if dx == 0 && dy == 0 {
+        return;
+    }
+
+    let arrow_x = x2 - dx;
+    let arrow_y = y2 - dy;
+    let ch = if dx > 0 {
+        '>'
+    } else if dx < 0 {
+        '<'
+    } else if dy > 0 {
+        'v'
+    } else {
+        '^'
+    };
+    set_arrow_cell(grid, arrow_x, arrow_y, ch);
+}
+
+fn set_arrow_cell(grid: &mut [Vec<char>], x: i32, y: i32, ch: char) {
+    if y < 0 || x < 0 {
+        return;
+    }
+    let y = y as usize;
+    let x = x as usize;
+    if y >= grid.len() || x >= grid[y].len() {
+        return;
+    }
+    grid[y][x] = ch;
 }
