@@ -138,3 +138,29 @@ fn parses_subgraphs() {
     assert_eq!(inner.id, "inner");
     assert!(inner.nodes.contains(&"D".to_string()));
 }
+
+#[test]
+fn parses_sample_flowchart() {
+    let input = "flowchart TD\n    A[Christmas] -->|Get money| B(Go shopping)\n    B --> C{Let me think}\n    C -->|One| D[Laptop]\n    C -->|Two| E[iPhone]\n    C -->|Three| F[fa:fa-car Car]\n";
+    let graph = parse_flowchart(input).expect("parse failed");
+    assert_eq!(graph.edges.len(), 5);
+
+    let b = graph.nodes.iter().find(|n| n.id == "B").unwrap();
+    assert_eq!(b.label.as_deref(), Some("Go shopping"));
+
+    let c = graph.nodes.iter().find(|n| n.id == "C").unwrap();
+    assert_eq!(c.shape, NodeShape::Diamond);
+    assert_eq!(c.label.as_deref(), Some("Let me think"));
+
+    let f = graph.nodes.iter().find(|n| n.id == "F").unwrap();
+    assert_eq!(f.label.as_deref(), Some("fa:fa-car Car"));
+}
+
+#[test]
+fn allows_quoted_node_ids() {
+    let input = "flowchart TB\n\"Node A\"-->\"Node B\"\n";
+    let graph = parse_flowchart(input).expect("parse failed");
+    assert_eq!(graph.edges.len(), 1);
+    assert!(graph.nodes.iter().any(|n| n.id == "Node A"));
+    assert!(graph.nodes.iter().any(|n| n.id == "Node B"));
+}

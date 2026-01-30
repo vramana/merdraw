@@ -49,7 +49,7 @@ impl<'a> Parser<'a> {
                 TokenKind::KwEnd => {
                     return Err(self.error_here("unexpected 'end' outside subgraph"));
                 }
-                TokenKind::Ident(id) => {
+                TokenKind::Ident(id) | TokenKind::StringLiteral(id) => {
                     self.advance()?;
                     let mut subgraph = None;
                     self.parse_statement(id, &mut subgraph)?;
@@ -73,41 +73,12 @@ impl<'a> Parser<'a> {
                 let subgraph_ref = subgraph.as_deref_mut();
                 self.parse_edge_chain(id, style, arrow, subgraph_ref)
             }
-            TokenKind::LabelBracket(label) => {
-                self.advance()?;
-                self.upsert_node(id.clone(), Some(label), NodeShape::Bracket);
-                if let Some(current) = subgraph.as_deref_mut() {
-                    current.add_node(&id);
-                }
-                self.parse_edge_after_labeled_node(id, subgraph)
-            }
-            TokenKind::LabelRound(label) => {
-                self.advance()?;
-                self.upsert_node(id.clone(), Some(label), NodeShape::Round);
-                if let Some(current) = subgraph.as_deref_mut() {
-                    current.add_node(&id);
-                }
-                self.parse_edge_after_labeled_node(id, subgraph)
-            }
-            TokenKind::LabelCircle(label) => {
-                self.advance()?;
-                self.upsert_node(id.clone(), Some(label), NodeShape::Circle);
-                if let Some(current) = subgraph.as_deref_mut() {
-                    current.add_node(&id);
-                }
-                self.parse_edge_after_labeled_node(id, subgraph)
-            }
-            TokenKind::LabelDiamond(label) => {
-                self.advance()?;
-                self.upsert_node(id.clone(), Some(label), NodeShape::Diamond);
-                if let Some(current) = subgraph.as_deref_mut() {
-                    current.add_node(&id);
-                }
-                self.parse_edge_after_labeled_node(id, subgraph)
-            }
-            TokenKind::LabelHexagon(label) => {
-                self.advance()?;
-                self.upsert_node(id.clone(), Some(label), NodeShape::Hexagon);
+            TokenKind::LabelBracket(_)
+            | TokenKind::LabelRound(_)
+            | TokenKind::LabelCircle(_)
+            | TokenKind::LabelDiamond(_)
+            | TokenKind::LabelHexagon(_) => {
+                self.consume_node_label(&id)?;
                 if let Some(current) = subgraph.as_deref_mut() {
                     current.add_node(&id);
                 }
@@ -152,7 +123,7 @@ impl<'a> Parser<'a> {
             }
 
             let to = match self.current.kind.clone() {
-                TokenKind::Ident(id) => {
+                TokenKind::Ident(id) | TokenKind::StringLiteral(id) => {
                     self.advance()?;
                     id
                 }
@@ -161,6 +132,7 @@ impl<'a> Parser<'a> {
 
             self.upsert_node(from.clone(), None, NodeShape::Plain);
             self.upsert_node(to.clone(), None, NodeShape::Plain);
+            self.consume_node_label(&to)?;
             if let Some(current) = subgraph.as_deref_mut() {
                 current.add_node(&from);
                 current.add_node(&to);
@@ -188,7 +160,7 @@ impl<'a> Parser<'a> {
     fn parse_subgraph(&mut self) -> Result<Subgraph, ParseError> {
         self.advance()?;
         let id = match self.current.kind.clone() {
-            TokenKind::Ident(id) => {
+            TokenKind::Ident(id) | TokenKind::StringLiteral(id) => {
                 self.advance()?;
                 id
             }
@@ -223,7 +195,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     return Ok(subgraph);
                 }
-                TokenKind::Ident(id) => {
+                TokenKind::Ident(id) | TokenKind::StringLiteral(id) => {
                     self.advance()?;
                     let mut current = Some(&mut subgraph);
                     self.parse_statement(id, &mut current)?;
@@ -262,6 +234,33 @@ impl<'a> Parser<'a> {
 
     fn advance(&mut self) -> Result<(), ParseError> {
         self.current = self.lexer.next_token()?;
+        Ok(())
+    }
+
+    fn consume_node_label(&mut self, id: &str) -> Result<(), ParseError> {
+        match self.current.kind.clone() {
+            TokenKind::LabelBracket(label) => {
+                self.advance()?;
+                self.upsert_node(id.to_string(), Some(label), NodeShape::Bracket);
+            }
+            TokenKind::LabelRound(label) => {
+                self.advance()?;
+                self.upsert_node(id.to_string(), Some(label), NodeShape::Round);
+            }
+            TokenKind::LabelCircle(label) => {
+                self.advance()?;
+                self.upsert_node(id.to_string(), Some(label), NodeShape::Circle);
+            }
+            TokenKind::LabelDiamond(label) => {
+                self.advance()?;
+                self.upsert_node(id.to_string(), Some(label), NodeShape::Diamond);
+            }
+            TokenKind::LabelHexagon(label) => {
+                self.advance()?;
+                self.upsert_node(id.to_string(), Some(label), NodeShape::Hexagon);
+            }
+            _ => {}
+        }
         Ok(())
     }
 
