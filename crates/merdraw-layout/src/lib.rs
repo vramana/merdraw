@@ -85,6 +85,7 @@ struct WorkNode {
     y: f32,
     is_dummy: bool,
     shape: NodeShape,
+    group_key: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,10 +115,13 @@ struct UnitEdge {
 pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
     let mut nodes = Vec::new();
     let mut node_index = HashMap::new();
+    let mut group_paths = HashMap::new();
+    collect_group_paths(&graph.subgraphs, &mut Vec::new(), &mut group_paths);
 
     for node in &graph.nodes {
         let (width, height) = estimate_node_size(node, style);
         let idx = nodes.len();
+        let group_key = group_paths.get(&node.id).cloned().unwrap_or_default();
         nodes.push(WorkNode {
             id: node.id.clone(),
             label: node.label.clone(),
@@ -129,6 +133,7 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
             y: 0.0,
             is_dummy: false,
             shape: node.shape.clone(),
+            group_key,
         });
         node_index.insert(node.id.clone(), idx);
     }
@@ -205,6 +210,21 @@ fn build_layout_subgraph(subgraph: &Subgraph) -> LayoutSubgraph {
             .iter()
             .map(build_layout_subgraph)
             .collect(),
+    }
+}
+
+fn collect_group_paths(
+    subgraphs: &[Subgraph],
+    prefix: &mut Vec<usize>,
+    map: &mut HashMap<String, Vec<usize>>,
+) {
+    for (idx, subgraph) in subgraphs.iter().enumerate() {
+        prefix.push(idx);
+        for node_id in &subgraph.nodes {
+            map.entry(node_id.clone()).or_insert_with(|| prefix.clone());
+        }
+        collect_group_paths(&subgraph.subgraphs, prefix, map);
+        prefix.pop();
     }
 }
 
@@ -335,6 +355,7 @@ fn insert_dummy_nodes(
                 y: 0.0,
                 is_dummy: true,
                 shape: NodeShape::Plain,
+                group_key: nodes[edge.from].group_key.clone(),
             });
             chain_nodes.push(dummy_idx);
             unit_edges.push(UnitEdge {
@@ -365,7 +386,9 @@ fn build_layers(nodes: &mut [WorkNode]) -> Vec<Vec<usize>> {
         layers[node.layer].push(idx);
     }
     for layer in &mut layers {
-        layer.sort();
+        layer.sort_by(|&a, &b| {
+            cmp_group_key(&nodes[a], &nodes[b]).then_with(|| a.cmp(&b))
+        });
         for (order, &node_idx) in layer.iter().enumerate() {
             nodes[node_idx].order = order;
         }
@@ -427,15 +450,27 @@ fn reorder_layer(
         .collect();
 
     scored.sort_by(|a, b| {
-        a.1
-            .partial_cmp(&b.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        cmp_group_key(&nodes[a.0], &nodes[b.0])
+            .then_with(|| {
+                a.1
+                    .partial_cmp(&b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then_with(|| position[a.0].cmp(&position[b.0]))
     });
 
     layers[layer_index] = scored.iter().map(|(idx, _)| *idx).collect();
     for (order, &node_idx) in layers[layer_index].iter().enumerate() {
         nodes[node_idx].order = order;
+    }
+}
+
+fn cmp_group_key(a: &WorkNode, b: &WorkNode) -> std::cmp::Ordering {
+    match (a.group_key.is_empty(), b.group_key.is_empty()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        (false, false) => a.group_key.cmp(&b.group_key),
     }
 }
 
