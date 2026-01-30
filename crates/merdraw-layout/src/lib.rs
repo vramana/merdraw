@@ -194,6 +194,7 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
     reduce_crossings(&mut nodes, &mut layers, &unit_edges, 6);
     let direction = graph.direction.clone();
     assign_coordinates(&mut nodes, &layers, style, direction.clone());
+    separate_subgraphs(&mut nodes, graph, style, direction.clone());
 
     let (width, height) = compute_graph_extent(&nodes, direction.clone());
     let layout_edges = route_edges(
@@ -583,6 +584,89 @@ fn cmp_group_key(a: &WorkNode, b: &WorkNode) -> std::cmp::Ordering {
         (true, false) => std::cmp::Ordering::Greater,
         (false, true) => std::cmp::Ordering::Less,
         (false, false) => a.group_key.cmp(&b.group_key),
+    }
+}
+
+fn separate_subgraphs(nodes: &mut [WorkNode], graph: &Graph, style: &LayoutStyle, direction: Direction) {
+    if graph.subgraphs.is_empty() {
+        return;
+    }
+
+    let gap = style.node_gap.max(16.0);
+    let mut groups: Vec<(usize, Bounds)> = Vec::new();
+    for (idx, _subgraph) in graph.subgraphs.iter().enumerate() {
+        if let Some(bounds) = group_bounds(nodes, idx) {
+            groups.push((idx, bounds));
+        }
+    }
+
+    if groups.len() <= 1 {
+        return;
+    }
+
+    match direction {
+        Direction::TB | Direction::BT => {
+            groups.sort_by(|a, b| a.1.left.partial_cmp(&b.1.left).unwrap_or(std::cmp::Ordering::Equal));
+            let mut current_right = groups[0].1.right;
+            for (group_idx, bounds) in groups.into_iter().skip(1) {
+                if bounds.left < current_right + gap {
+                    let delta = current_right + gap - bounds.left;
+                    shift_group(nodes, group_idx, delta, 0.0);
+                    current_right = bounds.right + delta;
+                } else {
+                    current_right = bounds.right;
+                }
+            }
+        }
+        Direction::LR | Direction::RL => {
+            groups.sort_by(|a, b| a.1.top.partial_cmp(&b.1.top).unwrap_or(std::cmp::Ordering::Equal));
+            let mut current_bottom = groups[0].1.bottom;
+            for (group_idx, bounds) in groups.into_iter().skip(1) {
+                if bounds.top < current_bottom + gap {
+                    let delta = current_bottom + gap - bounds.top;
+                    shift_group(nodes, group_idx, 0.0, delta);
+                    current_bottom = bounds.bottom + delta;
+                } else {
+                    current_bottom = bounds.bottom;
+                }
+            }
+        }
+    }
+}
+
+fn group_bounds(nodes: &[WorkNode], group_idx: usize) -> Option<Bounds> {
+    let mut bounds: Option<Bounds> = None;
+    for node in nodes {
+        if node.is_dummy {
+            continue;
+        }
+        if node.group_key.first().copied() != Some(group_idx) {
+            continue;
+        }
+        let node_bounds = Bounds {
+            left: node.x - node.width / 2.0,
+            right: node.x + node.width / 2.0,
+            top: node.y - node.height / 2.0,
+            bottom: node.y + node.height / 2.0,
+        };
+        bounds = Some(match bounds {
+            Some(existing) => union_bounds(existing, node_bounds),
+            None => node_bounds,
+        });
+    }
+    bounds
+}
+
+fn shift_group(nodes: &mut [WorkNode], group_idx: usize, dx: f32, dy: f32) {
+    if dx == 0.0 && dy == 0.0 {
+        return;
+    }
+    for node in nodes {
+        if node.group_key.first().copied() != Some(group_idx) {
+            continue;
+        }
+        node.x += dx;
+        node.y += dy;
     }
 }
 
