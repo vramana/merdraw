@@ -88,10 +88,10 @@ fn draw_node(grid: &mut [Vec<char>], node: &LayoutNode, scale: f32) {
         set_cell(grid, right, y, '|');
     }
 
-    set_cell(grid, left, top, '*');
-    set_cell(grid, right, top, '*');
-    set_cell(grid, left, bottom, '*');
-    set_cell(grid, right, bottom, '*');
+    set_cell(grid, left, top, '-');
+    set_cell(grid, right, top, '-');
+    set_cell(grid, left, bottom, '-');
+    set_cell(grid, right, bottom, '-');
 
     let available = (right - left - 1).max(0) as usize;
     if available > 0 {
@@ -127,7 +127,7 @@ fn draw_line(grid: &mut [Vec<char>], x1: i32, y1: i32, x2: i32, y2: i32) {
     // Manhattan corner: draw two segments.
     draw_line(grid, x1, y1, x1, y2);
     draw_line(grid, x1, y2, x2, y2);
-    set_cell(grid, x1, y2, '*');
+    set_cell(grid, x1, y2, '-');
 }
 
 fn set_cell(grid: &mut [Vec<char>], x: i32, y: i32, ch: char) {
@@ -141,7 +141,7 @@ fn set_cell(grid: &mut [Vec<char>], x: i32, y: i32, ch: char) {
     }
 
     let existing = grid[y][x];
-    if existing == ' ' || existing == ch || existing == '-' || existing == '|' || existing == '*' {
+    if existing == ' ' || existing == ch || existing == '-' || existing == '|' {
         grid[y][x] = merge_char(existing, ch);
     }
 }
@@ -154,8 +154,7 @@ fn merge_char(existing: char, incoming: char) -> char {
         return existing;
     }
     match (existing, incoming) {
-        ('-', '|') | ('|', '-') => '*',
-        ('*', _) | (_, '*') => '*',
+        ('-', '|') | ('|', '-') => '-',
         _ => incoming,
     }
 }
