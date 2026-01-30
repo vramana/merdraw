@@ -21,3 +21,13 @@ fn encodes_jpeg_or_reports_unsupported() {
         Err(err) => panic!("unexpected error: {:?}", err),
     }
 }
+
+#[test]
+fn renders_labels_without_error() {
+    let graph = parse_flowchart("flowchart TB\nA[Alpha]-->|Edge label|B[Beta]\n")
+        .expect("parse failed");
+    let layout = layout_flowchart(&graph, &LayoutStyle::default());
+    let bytes = render_to_bytes(&layout, ImageFormat::Png, &SkiaRenderOptions::default())
+        .expect("render failed");
+    assert!(bytes.starts_with(b"\x89PNG"));
+}

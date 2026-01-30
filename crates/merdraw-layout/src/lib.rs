@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use merdraw_parser::{
-    Direction, EdgeArrow, EdgeStyle, Graph, Node as ParsedNode, NodeShape,
+    Direction, EdgeArrow, EdgeStyle, Graph, Node as ParsedNode, NodeShape, Subgraph,
 };
 
 #[derive(Debug, Clone)]
@@ -34,6 +34,7 @@ impl Default for LayoutStyle {
 #[derive(Debug, Clone)]
 pub struct LayoutNode {
     pub id: String,
+    pub label: Option<String>,
     pub width: f32,
     pub height: f32,
     pub layer: usize,
@@ -59,13 +60,23 @@ pub struct LayoutEdge {
 pub struct LayoutGraph {
     pub nodes: Vec<LayoutNode>,
     pub edges: Vec<LayoutEdge>,
+    pub subgraphs: Vec<LayoutSubgraph>,
     pub width: f32,
     pub height: f32,
 }
 
 #[derive(Debug, Clone)]
+pub struct LayoutSubgraph {
+    pub id: String,
+    pub title: Option<String>,
+    pub nodes: Vec<String>,
+    pub subgraphs: Vec<LayoutSubgraph>,
+}
+
+#[derive(Debug, Clone)]
 struct WorkNode {
     id: String,
+    label: Option<String>,
     width: f32,
     height: f32,
     layer: usize,
@@ -109,6 +120,7 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
         let idx = nodes.len();
         nodes.push(WorkNode {
             id: node.id.clone(),
+            label: node.label.clone(),
             width,
             height,
             layer: 0,
@@ -154,12 +166,18 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
         &mut chains,
         direction,
     );
+    let layout_subgraphs = graph
+        .subgraphs
+        .iter()
+        .map(build_layout_subgraph)
+        .collect();
 
     LayoutGraph {
         nodes: nodes
             .into_iter()
             .map(|node| LayoutNode {
                 id: node.id,
+                label: node.label,
                 width: node.width,
                 height: node.height,
                 layer: node.layer,
@@ -171,8 +189,22 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
             })
             .collect(),
         edges: layout_edges,
+        subgraphs: layout_subgraphs,
         width,
         height,
+    }
+}
+
+fn build_layout_subgraph(subgraph: &Subgraph) -> LayoutSubgraph {
+    LayoutSubgraph {
+        id: subgraph.id.clone(),
+        title: subgraph.title.clone(),
+        nodes: subgraph.nodes.clone(),
+        subgraphs: subgraph
+            .subgraphs
+            .iter()
+            .map(build_layout_subgraph)
+            .collect(),
     }
 }
 
@@ -294,6 +326,7 @@ fn insert_dummy_nodes(
             let dummy_idx = nodes.len();
             nodes.push(WorkNode {
                 id: dummy_id,
+                label: None,
                 width: 1.0,
                 height: 1.0,
                 layer,

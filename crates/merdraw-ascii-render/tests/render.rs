@@ -48,6 +48,25 @@ fn sizes_box_to_fit_label() {
 }
 
 #[test]
+fn prefers_node_label_over_id() {
+    let graph = parse_flowchart("flowchart TB\nA[Alpha Beta]\n").expect("parse failed");
+    let layout = layout_flowchart(&graph, &LayoutStyle::default());
+    let output = render_ascii(&layout, &AsciiRenderOptions::default());
+    assert!(output.contains("Alpha Beta"));
+}
+
+#[test]
+fn renders_subgraph_title() {
+    let graph = parse_flowchart(
+        "flowchart TB\nsubgraph cluster1[Cluster One]\nA-->B\nend\n",
+    )
+    .expect("parse failed");
+    let layout = layout_flowchart(&graph, &LayoutStyle::default());
+    let output = render_ascii(&layout, &AsciiRenderOptions::default());
+    assert!(output.contains("Cluster One"));
+}
+
+#[test]
 fn renders_branching_edges() {
     let graph = parse_flowchart("flowchart TB\nA-->B\nA-->C\n").expect("parse failed");
     let layout = layout_flowchart(&graph, &LayoutStyle::default());

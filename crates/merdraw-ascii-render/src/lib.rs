@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use merdraw_layout::{LayoutGraph, LayoutNode};
+use merdraw_layout::{LayoutGraph, LayoutNode, LayoutSubgraph};
 
 #[derive(Debug, Clone)]
 pub struct AsciiRenderOptions {
@@ -30,12 +30,15 @@ pub fn render_ascii(layout: &LayoutGraph, options: &AsciiRenderOptions) -> Strin
     let scale_y = (height / options.max_height as f32).max(1.0);
     let scale = scale_x.max(scale_y);
 
-    let grid_width = ((width / scale).ceil() as usize).max(1) + 2;
+    let extra_width = max_subgraph_label_len(&layout.subgraphs);
+    let grid_width = ((width / scale).ceil() as usize).max(1) + 2 + extra_width;
     let grid_height = ((height / scale).ceil() as usize).max(1) + 2;
 
     let mut grid = vec![vec![' '; grid_width]; grid_height];
 
     let bounds = build_bounds(&layout.nodes, scale);
+
+    draw_subgraphs(&mut grid, &layout.subgraphs, &bounds);
     let mut edge_paths: Vec<Vec<(i32, i32)>> = Vec::new();
 
     // Edges first so nodes appear on top.
@@ -97,6 +100,99 @@ pub fn render_ascii(layout: &LayoutGraph, options: &AsciiRenderOptions) -> Strin
         .join("\n")
 }
 
+fn draw_subgraphs(
+    grid: &mut [Vec<char>],
+    subgraphs: &[LayoutSubgraph],
+    bounds: &HashMap<String, Bounds>,
+) {
+    for subgraph in subgraphs {
+        draw_subgraph(grid, subgraph, bounds);
+    }
+}
+
+fn draw_subgraph(
+    grid: &mut [Vec<char>],
+    subgraph: &LayoutSubgraph,
+    bounds: &HashMap<String, Bounds>,
+) -> Option<Bounds> {
+    let mut min_left = i32::MAX;
+    let mut max_right = i32::MIN;
+    let mut min_top = i32::MAX;
+    let mut max_bottom = i32::MIN;
+    let mut has_node = false;
+
+    for node_id in &subgraph.nodes {
+        if let Some(node_bounds) = bounds.get(node_id) {
+            has_node = true;
+            min_left = min_left.min(node_bounds.left);
+            max_right = max_right.max(node_bounds.right);
+            min_top = min_top.min(node_bounds.top);
+            max_bottom = max_bottom.max(node_bounds.bottom);
+        }
+    }
+
+    for child in &subgraph.subgraphs {
+        if let Some(child_bounds) = draw_subgraph(grid, child, bounds) {
+            has_node = true;
+            min_left = min_left.min(child_bounds.left);
+            max_right = max_right.max(child_bounds.right);
+            min_top = min_top.min(child_bounds.top);
+            max_bottom = max_bottom.max(child_bounds.bottom);
+        }
+    }
+
+    if !has_node {
+        return None;
+    }
+
+    let padding = 1;
+    let left = min_left - padding;
+    let mut right = max_right + padding;
+    let top = min_top - padding;
+    let bottom = max_bottom + padding;
+
+    let label = subgraph.title.as_deref().unwrap_or(subgraph.id.as_str());
+    if !label.is_empty() {
+        let current_width = right - left + 1;
+        let label_width = label.chars().count() as i32 + 2;
+        if label_width > current_width {
+            right += label_width - current_width;
+        }
+    }
+
+    for x in left..=right {
+        set_cell(grid, x, top, '-');
+        set_cell(grid, x, bottom, '-');
+    }
+    for y in top..=bottom {
+        set_cell(grid, left, y, '|');
+        set_cell(grid, right, y, '|');
+    }
+
+    let label = subgraph.title.as_deref().unwrap_or(subgraph.id.as_str());
+    if !label.is_empty() {
+        let available = (right - left - 1).max(0) as usize;
+        if available > 0 {
+            let mut text = label.to_string();
+            if text.len() > available {
+                text.truncate(available);
+            }
+            let start_x = left + 2;
+            let label_y = top;
+            for (idx, ch) in text.chars().enumerate() {
+                set_cell(grid, start_x + idx as i32, label_y, ch);
+            }
+        }
+    }
+
+    Some(Bounds {
+        left,
+        right,
+        top,
+        bottom,
+    })
+}
+
 fn map_point(point: (f32, f32), scale: f32) -> (i32, i32) {
     let x = (point.0 / scale).round() as i32;
     let y = (point.1 / scale).round() as i32;
@@ -105,7 +201,7 @@ fn map_point(point: (f32, f32), scale: f32) -> (i32, i32) {
 
 fn draw_node(grid: &mut [Vec<char>], node: &LayoutNode, scale: f32) {
     let (cx, cy) = map_point((node.x, node.y), scale);
-    let label = node.id.as_str();
+    let label = node.label.as_deref().unwrap_or(node.id.as_str());
     let min_width = 3usize;
     let box_width = (label.chars().count() + 2).max(min_width) as i32;
     let box_height = 3i32;
@@ -158,7 +254,7 @@ fn build_bounds(nodes: &[LayoutNode], scale: f32) -> HashMap<String, Bounds> {
             continue;
         }
         let (cx, cy) = map_point((node.x, node.y), scale);
-        let label = node.id.as_str();
+        let label = node.label.as_deref().unwrap_or(node.id.as_str());
         let min_width = 3usize;
         let box_width = (label.chars().count() + 2).max(min_width) as i32;
         let box_height = 3i32;
@@ -284,4 +380,14 @@ fn set_arrow_cell(grid: &mut [Vec<char>], x: i32, y: i32, ch: char) {
         return;
     }
     grid[y][x] = ch;
+}
+
+fn max_subgraph_label_len(subgraphs: &[LayoutSubgraph]) -> usize {
+    let mut max_len = 0usize;
+    for subgraph in subgraphs {
+        let label = subgraph.title.as_deref().unwrap_or(subgraph.id.as_str());
+        max_len = max_len.max(label.chars().count());
+        max_len = max_len.max(max_subgraph_label_len(&subgraph.subgraphs));
+    }
+    max_len
 }
