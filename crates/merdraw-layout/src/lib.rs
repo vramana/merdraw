@@ -202,6 +202,7 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
         &edges,
         &mut chains,
         direction,
+        style,
     );
     let layout_subgraphs = graph
         .subgraphs
@@ -741,13 +742,19 @@ fn route_edges(
     edges: &[EdgeMeta],
     chains: &mut [EdgeChain],
     direction: Direction,
+    style: &LayoutStyle,
 ) -> Vec<LayoutEdge> {
     let mut layout_edges = Vec::new();
+    let lane_offsets = build_edge_lane_offsets(nodes, edges, direction.clone(), style);
     for chain in chains {
         let edge = &edges[chain.edge_index];
+        let lane_offset = lane_offsets
+            .get(&chain.edge_index)
+            .copied()
+            .unwrap_or(0.0);
         let points = match direction {
-            Direction::TB | Direction::BT => route_chain_tb(nodes, &chain.nodes),
-            Direction::LR | Direction::RL => route_chain_lr(nodes, &chain.nodes),
+            Direction::TB | Direction::BT => route_chain_tb(nodes, &chain.nodes, lane_offset),
+            Direction::LR | Direction::RL => route_chain_lr(nodes, &chain.nodes, lane_offset),
         };
         layout_edges.push(LayoutEdge {
             from: nodes[edge.orig_from].id.clone(),
@@ -762,14 +769,14 @@ fn route_edges(
     layout_edges
 }
 
-fn route_chain_tb(nodes: &[WorkNode], chain: &[usize]) -> Vec<(f32, f32)> {
+fn route_chain_tb(nodes: &[WorkNode], chain: &[usize], lane_offset: f32) -> Vec<(f32, f32)> {
     let mut points = Vec::new();
     for pair in chain.windows(2) {
         let from = &nodes[pair[0]];
         let to = &nodes[pair[1]];
         let start = (from.x, from.y + from.height / 2.0);
         let end = (to.x, to.y - to.height / 2.0);
-        let mid_y = (start.1 + end.1) / 2.0;
+        let mid_y = (start.1 + end.1) / 2.0 + lane_offset;
         push_point(&mut points, start);
         if (start.0 - end.0).abs() < 0.01 {
             push_point(&mut points, (start.0, mid_y));
@@ -782,14 +789,14 @@ fn route_chain_tb(nodes: &[WorkNode], chain: &[usize]) -> Vec<(f32, f32)> {
     points
 }
 
-fn route_chain_lr(nodes: &[WorkNode], chain: &[usize]) -> Vec<(f32, f32)> {
+fn route_chain_lr(nodes: &[WorkNode], chain: &[usize], lane_offset: f32) -> Vec<(f32, f32)> {
     let mut points = Vec::new();
     for pair in chain.windows(2) {
         let from = &nodes[pair[0]];
         let to = &nodes[pair[1]];
         let start = (from.x + from.width / 2.0, from.y);
         let end = (to.x - to.width / 2.0, to.y);
-        let mid_x = (start.0 + end.0) / 2.0;
+        let mid_x = (start.0 + end.0) / 2.0 + lane_offset;
         push_point(&mut points, start);
         if (start.1 - end.1).abs() < 0.01 {
             push_point(&mut points, (mid_x, start.1));
@@ -800,6 +807,50 @@ fn route_chain_lr(nodes: &[WorkNode], chain: &[usize]) -> Vec<(f32, f32)> {
         push_point(&mut points, end);
     }
     points
+}
+
+fn build_edge_lane_offsets(
+    nodes: &[WorkNode],
+    edges: &[EdgeMeta],
+    direction: Direction,
+    style: &LayoutStyle,
+) -> HashMap<usize, f32> {
+    let mut by_from: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (idx, edge) in edges.iter().enumerate() {
+        by_from.entry(edge.from).or_default().push(idx);
+    }
+
+    let lane_gap = match direction {
+        Direction::TB | Direction::BT => style.char_height.max(10.0) * 1.2,
+        Direction::LR | Direction::RL => style.char_width.max(6.0) * 2.0,
+    };
+
+    let mut offsets = HashMap::new();
+    for (_from, mut edge_indices) in by_from {
+        edge_indices.sort_by(|a, b| match direction {
+            Direction::TB | Direction::BT => nodes[edges[*a].to]
+                .x
+                .partial_cmp(&nodes[edges[*b].to].x)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            Direction::LR | Direction::RL => nodes[edges[*a].to]
+                .y
+                .partial_cmp(&nodes[edges[*b].to].y)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        });
+
+        let n = edge_indices.len();
+        if n == 1 {
+            offsets.insert(edge_indices[0], 0.0);
+            continue;
+        }
+        let center = (n as f32 - 1.0) / 2.0;
+        for (i, edge_idx) in edge_indices.into_iter().enumerate() {
+            let offset = (i as f32 - center) * lane_gap;
+            offsets.insert(edge_idx, offset);
+        }
+    }
+
+    offsets
 }
 
 fn push_point(points: &mut Vec<(f32, f32)>, point: (f32, f32)) {
