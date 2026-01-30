@@ -176,17 +176,9 @@ fn clip_point(point: (i32, i32), other: (i32, i32), bounds: &Bounds) -> (i32, i3
     let dx = (other.0 - x).signum();
     let dy = (other.1 - y).signum();
     if dx != 0 && dy == 0 {
-        x = if dx > 0 {
-            bounds.right + 1
-        } else {
-            bounds.left - 1
-        };
+        x = if dx > 0 { bounds.right } else { bounds.left };
     } else if dy != 0 && dx == 0 {
-        y = if dy > 0 {
-            bounds.bottom + 1
-        } else {
-            bounds.top - 1
-        };
+        y = if dy > 0 { bounds.bottom } else { bounds.top };
     }
     (x, y)
 }
@@ -254,9 +246,8 @@ fn draw_arrow(grid: &mut [Vec<char>], points: &[(i32, i32)]) {
     if dx == 0 && dy == 0 {
         return;
     }
-
-    let arrow_x = x2 - dx;
-    let arrow_y = y2 - dy;
+    let arrow_x = x2;
+    let arrow_y = y2;
     let ch = if dx > 0 {
         '>'
     } else if dx < 0 {
