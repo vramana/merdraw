@@ -246,8 +246,12 @@ fn draw_arrow(grid: &mut [Vec<char>], points: &[(i32, i32)]) {
     if dx == 0 && dy == 0 {
         return;
     }
-    let arrow_x = x2;
-    let arrow_y = y2;
+    let mut arrow_x = x2;
+    let mut arrow_y = y2;
+    if matches!(get_cell(grid, arrow_x, arrow_y), Some('-' | '|')) {
+        arrow_x -= dx;
+        arrow_y -= dy;
+    }
     let ch = if dx > 0 {
         '>'
     } else if dx < 0 {
@@ -270,4 +274,16 @@ fn set_arrow_cell(grid: &mut [Vec<char>], x: i32, y: i32, ch: char) {
         return;
     }
     grid[y][x] = ch;
+}
+
+fn get_cell(grid: &[Vec<char>], x: i32, y: i32) -> Option<char> {
+    if y < 0 || x < 0 {
+        return None;
+    }
+    let y = y as usize;
+    let x = x as usize;
+    if y >= grid.len() || x >= grid[y].len() {
+        return None;
+    }
+    Some(grid[y][x])
 }
