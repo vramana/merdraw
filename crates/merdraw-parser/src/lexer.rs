@@ -9,6 +9,7 @@ pub enum TokenKind {
     Direction(Direction),
     Ident(String),
     EdgeOp(EdgeStyle, EdgeArrow),
+    StringLiteral(String),
     LabelBracket(String),
     LabelRound(String),
     LabelCircle(String),
@@ -78,6 +79,10 @@ impl<'a> Lexer<'a> {
 
             if b == b'|' {
                 return self.read_pipe_label();
+            }
+
+            if b == b'"' {
+                return self.read_string_literal();
             }
 
             if b == b'(' {
@@ -215,6 +220,23 @@ impl<'a> Lexer<'a> {
             });
         }
         Err(ParseError::new("unterminated '( )' label".to_string(), start))
+    }
+
+    fn read_string_literal(&mut self) -> Result<Token, ParseError> {
+        let start = self.pos;
+        let search_start = self.pos + 1;
+        if let Some(end_rel) = self.input[search_start..].find('"') {
+            let end = search_start + end_rel;
+            let text = self.input[search_start..end].to_string();
+            self.pos = end + 1;
+            Ok(Token {
+                kind: TokenKind::StringLiteral(text),
+                start,
+                end: self.pos,
+            })
+        } else {
+            Err(ParseError::new("unterminated string literal".to_string(), start))
+        }
     }
 
     fn read_brace_label(&mut self) -> Result<Token, ParseError> {

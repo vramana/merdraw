@@ -124,11 +124,12 @@ fn parses_chained_edges() {
 
 #[test]
 fn parses_subgraphs() {
-    let input = "flowchart TB\nsubgraph group1\nA-->B-->C\nsubgraph inner\nD\nend\nend\n";
+    let input = "flowchart TB\nsubgraph group1 \"Outer Group\"\nA-->B-->C\nsubgraph inner\nD\nend\nend\n";
     let graph = parse_flowchart(input).expect("parse failed");
     assert_eq!(graph.subgraphs.len(), 1);
     let outer = &graph.subgraphs[0];
     assert_eq!(outer.id, "group1");
+    assert_eq!(outer.title.as_deref(), Some("Outer Group"));
     assert!(outer.nodes.contains(&"A".to_string()));
     assert!(outer.nodes.contains(&"B".to_string()));
     assert!(outer.nodes.contains(&"C".to_string()));

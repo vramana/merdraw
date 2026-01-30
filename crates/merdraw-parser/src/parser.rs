@@ -197,7 +197,8 @@ impl<'a> Parser<'a> {
 
         let mut title = None;
         match self.current.kind.clone() {
-            TokenKind::LabelBracket(label)
+            TokenKind::StringLiteral(label)
+            | TokenKind::LabelBracket(label)
             | TokenKind::LabelRound(label)
             | TokenKind::LabelCircle(label)
             | TokenKind::LabelDiamond(label)
