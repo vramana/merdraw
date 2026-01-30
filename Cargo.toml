@@ -1,3 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/merdraw-parser", "crates/merdraw-layout"]
+members = [
+    "crates/merdraw-parser",
+    "crates/merdraw-layout",
+    "crates/merdraw-ascii-render",
+    "crates/merdraw",
+]

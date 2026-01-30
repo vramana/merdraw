@@ -1,0 +1,9 @@
+[package]
+name = "merdraw"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+merdraw-parser = { path = "../merdraw-parser" }
+merdraw-layout = { path = "../merdraw-layout" }
+merdraw-ascii-render = { path = "../merdraw-ascii-render" }
