@@ -91,8 +91,16 @@ pub fn render_to_bytes(
     }
     let text_paint = build_text_paint();
 
-    draw_subgraphs(canvas, layout, &transform, options, &font, &text_paint);
-    draw_edges(canvas, layout, &transform, options, &font, &text_paint);
+    let subgraph_rects = draw_subgraphs(canvas, layout, &transform, options, &font, &text_paint);
+    draw_edges(
+        canvas,
+        layout,
+        &transform,
+        options,
+        &font,
+        &text_paint,
+        &subgraph_rects,
+    );
     draw_nodes(canvas, layout, &transform, options, &font, &text_paint)?;
 
     let image = surface.image_snapshot();
@@ -199,6 +207,46 @@ fn snap_point(value: f32) -> f32 {
     value.round()
 }
 
+fn collect_node_rects(layout: &LayoutGraph, transform: &Transform) -> Vec<skia_safe::Rect> {
+    let mut rects = Vec::new();
+    for node in &layout.nodes {
+        if node.is_dummy {
+            continue;
+        }
+        let center = transform_point((node.x, node.y), transform);
+        let half_w = node.width * transform.scale / 2.0;
+        let half_h = node.height * transform.scale / 2.0;
+        rects.push(skia_safe::Rect::from_xywh(
+            center.x - half_w,
+            center.y - half_h,
+            half_w * 2.0,
+            half_h * 2.0,
+        ));
+    }
+    rects
+}
+
+fn normalize_point(point: Point) -> Point {
+    let len = (point.x * point.x + point.y * point.y).sqrt();
+    if len <= f32::EPSILON {
+        return Point::new(0.0, -1.0);
+    }
+    Point::new(point.x / len, point.y / len)
+}
+
+fn centered_rect(center: Point, width: f32, height: f32) -> skia_safe::Rect {
+    skia_safe::Rect::from_xywh(
+        center.x - width / 2.0,
+        center.y - height / 2.0,
+        width,
+        height,
+    )
+}
+
+fn rects_intersect_any(rect: skia_safe::Rect, rects: &[skia_safe::Rect]) -> bool {
+    rects.iter().any(|other| rects_overlap(rect, *other))
+}
+
 fn draw_subgraphs(
     canvas: &Canvas,
     layout: &LayoutGraph,
@@ -206,9 +254,9 @@ fn draw_subgraphs(
     options: &SkiaRenderOptions,
     font: &Font,
     text_paint: &Paint,
-) {
+) -> Vec<SubgraphRect> {
     if layout.subgraphs.is_empty() {
-        return;
+        return Vec::new();
     }
 
     let mut node_map = std::collections::HashMap::new();
@@ -255,6 +303,8 @@ fn draw_subgraphs(
         }
         log_subgraph_overlaps(&rects);
     }
+
+    rects
 }
 
 fn draw_subgraph(
@@ -449,6 +499,7 @@ fn draw_edges(
     options: &SkiaRenderOptions,
     font: &Font,
     text_paint: &Paint,
+    subgraph_rects: &[SubgraphRect],
 ) {
     let mut paint = Paint::default();
     paint.set_style(PaintStyle::Stroke);
@@ -457,7 +508,24 @@ fn draw_edges(
 
     for edge in &layout.edges {
         draw_edge_path(canvas, edge, transform, &paint, options);
-        draw_edge_label(canvas, edge, transform, options, font, text_paint);
+    }
+
+    let mut avoid_rects = collect_node_rects(layout, transform);
+    for rect in subgraph_rects {
+        avoid_rects.push(rect.rect);
+    }
+    let mut placed = Vec::new();
+    for edge in &layout.edges {
+        draw_edge_label(
+            canvas,
+            edge,
+            transform,
+            options,
+            font,
+            text_paint,
+            &avoid_rects,
+            &mut placed,
+        );
     }
 }
 
@@ -491,6 +559,8 @@ fn draw_edge_label(
     options: &SkiaRenderOptions,
     font: &Font,
     text_paint: &Paint,
+    avoid_rects: &[skia_safe::Rect],
+    placed: &mut Vec<skia_safe::Rect>,
 ) {
     let label = match edge.label.as_deref() {
         Some(label) if !label.trim().is_empty() => label,
@@ -546,9 +616,40 @@ fn draw_edge_label(
     );
 
     let (text_width, text_bounds) = font.measure_str(label, Some(text_paint));
-    let text_x = snap_point(label_pos.x - text_width / 2.0);
-    let text_y = snap_point(label_pos.y + text_bounds.height() / 2.0);
+    let text_height = text_bounds.height().max(options.font_size);
+    let base_center = Point::new(label_pos.x, label_pos.y);
+    let normal = normalize_point(normal);
+    let step = text_height + options.stroke_width * 2.0 + 4.0;
+    let max_steps = 6;
+
+    let mut chosen = None;
+    for offset_idx in 0..=max_steps * 2 {
+        let k = (offset_idx + 1) / 2;
+        let sign = if offset_idx == 0 {
+            0.0
+        } else if offset_idx % 2 == 1 {
+            1.0
+        } else {
+            -1.0
+        };
+        let offset = sign * k as f32 * step;
+        let center = Point::new(
+            base_center.x + normal.x * offset,
+            base_center.y + normal.y * offset,
+        );
+        let rect = centered_rect(center, text_width, text_height);
+        if !rects_intersect_any(rect, avoid_rects) && !rects_intersect_any(rect, placed) {
+            chosen = Some((center, rect));
+            break;
+        }
+    }
+
+    let (center, rect) = chosen
+        .unwrap_or((base_center, centered_rect(base_center, text_width, text_height)));
+    let text_x = snap_point(center.x - text_width / 2.0);
+    let text_y = snap_point(center.y + text_height / 2.0);
     canvas.draw_str(label, (text_x, text_y), font, text_paint);
+    placed.push(rect);
 }
 
 fn polyline_length(points: &[Point]) -> f32 {
