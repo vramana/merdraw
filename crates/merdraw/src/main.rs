@@ -19,7 +19,17 @@ fn main() {
     };
 
     let graph = parse_flowchart(&input).expect("failed to parse flowchart");
-    let layout = layout_flowchart(&graph, &LayoutStyle::default());
+    let layout_style = LayoutStyle {
+        min_width: 30.0,
+        min_height: 20.0,
+        char_width: 6.0,
+        char_height: 10.0,
+        node_padding_x: 8.0,
+        node_padding_y: 6.0,
+        node_gap: 12.0,
+        layer_gap: 20.0,
+    };
+    let layout = layout_flowchart(&graph, &layout_style);
     let output = render_ascii(&layout, &AsciiRenderOptions::default());
     println!("{output}");
 }

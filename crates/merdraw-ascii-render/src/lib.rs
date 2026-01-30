@@ -26,8 +26,8 @@ pub fn render_ascii(layout: &LayoutGraph, options: &AsciiRenderOptions) -> Strin
     let scale_y = (height / options.max_height as f32).max(1.0);
     let scale = scale_x.max(scale_y);
 
-    let grid_width = ((width / scale).ceil() as usize).max(1);
-    let grid_height = ((height / scale).ceil() as usize).max(1);
+    let grid_width = ((width / scale).ceil() as usize).max(1) + 2;
+    let grid_height = ((height / scale).ceil() as usize).max(1) + 2;
 
     let mut grid = vec![vec![' '; grid_width]; grid_height];
 
@@ -60,25 +60,16 @@ fn map_point(point: (f32, f32), scale: f32) -> (i32, i32) {
 }
 
 fn draw_node(grid: &mut [Vec<char>], node: &LayoutNode, scale: f32) {
-    let left = ((node.x - node.width / 2.0) / scale).floor() as i32;
-    let right = ((node.x + node.width / 2.0) / scale).ceil() as i32;
-    let top = ((node.y - node.height / 2.0) / scale).floor() as i32;
-    let bottom = ((node.y + node.height / 2.0) / scale).ceil() as i32;
+    let (cx, cy) = map_point((node.x, node.y), scale);
+    let label = node.id.as_str();
+    let min_width = 3usize;
+    let box_width = (label.chars().count() + 2).max(min_width) as i32;
+    let box_height = 3i32;
 
-    let min_width = 3;
-    let min_height = 3;
-
-    let left = left;
-    let mut right = right;
-    if right - left + 1 < min_width {
-        right = left + min_width - 1;
-    }
-
-    let top = top;
-    let mut bottom = bottom;
-    if bottom - top + 1 < min_height {
-        bottom = top + min_height - 1;
-    }
+    let left = cx - box_width / 2;
+    let right = left + box_width - 1;
+    let top = cy - box_height / 2;
+    let bottom = top + box_height - 1;
 
     for x in left..=right {
         set_cell(grid, x, top, '-');
@@ -94,7 +85,6 @@ fn draw_node(grid: &mut [Vec<char>], node: &LayoutNode, scale: f32) {
     set_cell(grid, left, bottom, '+');
     set_cell(grid, right, bottom, '+');
 
-    let label = node.id.as_str();
     let available = (right - left - 1).max(0) as usize;
     if available > 0 {
         let mut text = label.to_string();
