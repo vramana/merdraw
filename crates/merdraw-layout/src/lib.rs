@@ -593,9 +593,10 @@ fn separate_subgraphs(nodes: &mut [WorkNode], graph: &Graph, style: &LayoutStyle
     }
 
     let gap = style.node_gap.max(16.0);
+    let padding = (style.node_gap + style.layer_gap * 0.5).max(12.0);
     let mut groups: Vec<(usize, Bounds)> = Vec::new();
     for (idx, _subgraph) in graph.subgraphs.iter().enumerate() {
-        if let Some(bounds) = group_bounds(nodes, idx) {
+        if let Some(bounds) = group_bounds(nodes, idx, padding) {
             groups.push((idx, bounds));
         }
     }
@@ -634,7 +635,7 @@ fn separate_subgraphs(nodes: &mut [WorkNode], graph: &Graph, style: &LayoutStyle
     }
 }
 
-fn group_bounds(nodes: &[WorkNode], group_idx: usize) -> Option<Bounds> {
+fn group_bounds(nodes: &[WorkNode], group_idx: usize, padding: f32) -> Option<Bounds> {
     let mut bounds: Option<Bounds> = None;
     for node in nodes {
         if node.is_dummy {
@@ -654,7 +655,13 @@ fn group_bounds(nodes: &[WorkNode], group_idx: usize) -> Option<Bounds> {
             None => node_bounds,
         });
     }
-    bounds
+    bounds.map(|mut bounds| {
+        bounds.left -= padding;
+        bounds.right += padding;
+        bounds.top -= padding;
+        bounds.bottom += padding;
+        bounds
+    })
 }
 
 fn shift_group(nodes: &mut [WorkNode], group_idx: usize, dx: f32, dy: f32) {

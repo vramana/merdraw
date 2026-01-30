@@ -367,6 +367,9 @@ fn log_subgraph_overlaps(rects: &[SubgraphRect]) {
         for j in (i + 1)..rects.len() {
             let a = &rects[i];
             let b = &rects[j];
+            if is_ancestor(&a.path, &b.path) || is_ancestor(&b.path, &a.path) {
+                continue;
+            }
             if rects_overlap(a.rect, b.rect) {
                 eprintln!(
                     "warning: subgraph overlap: {} <-> {}",
@@ -375,6 +378,18 @@ fn log_subgraph_overlaps(rects: &[SubgraphRect]) {
             }
         }
     }
+}
+
+fn is_ancestor(parent: &str, child: &str) -> bool {
+    if parent == child {
+        return true;
+    }
+    if parent.is_empty() {
+        return false;
+    }
+    let mut prefix = parent.to_string();
+    prefix.push('/');
+    child.starts_with(&prefix)
 }
 
 fn rects_overlap(a: skia_safe::Rect, b: skia_safe::Rect) -> bool {
