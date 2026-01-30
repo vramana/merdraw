@@ -1,0 +1,35 @@
+flowchart TB
+subgraph Client
+A[Browser]
+B[HTTP Cache]
+end
+subgraph Network
+D[DNS Resolver]
+E[Server IP]
+end
+subgraph Edge
+F[CDN / Reverse Proxy]
+G[Load Balancer]
+end
+subgraph App
+H[App Server]
+I[In-Memory Cache]
+J[Database]
+K[Upstream Service]
+end
+
+A -->|Check cache| B
+B -->|Miss| A
+A -->|DNS query| D
+D -->|IP address| A
+A -->|TCP 3-way handshake| E
+A -->|TLS handshake| E
+A -->|HTTP request| F
+F -->|Serve cached?| F
+F -->|Forward request| G
+G --> H
+H --> I
+H --> J
+H --> K
+H -->|HTTP response| F
+F -->|HTTP response| A
