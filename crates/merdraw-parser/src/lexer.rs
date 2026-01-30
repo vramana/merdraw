@@ -1,13 +1,17 @@
-use crate::{Direction, ParseError};
+use crate::{Direction, EdgeArrow, EdgeStyle, ParseError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     KwFlowchart,
+    KwGraph,
     Direction(Direction),
     Ident(String),
-    Arrow,
+    EdgeOp(EdgeStyle, EdgeArrow),
     LabelBracket(String),
     LabelRound(String),
+    LabelCircle(String),
+    LabelDiamond(String),
+    LabelHexagon(String),
     LabelPipe(String),
     Newline,
     Eof,
@@ -62,14 +66,8 @@ impl<'a> Lexer<'a> {
                 });
             }
 
-            if b == b'-' && self.pos + 2 < self.len && bytes[self.pos + 1] == b'-' && bytes[self.pos + 2] == b'>' {
-                let start = self.pos;
-                self.pos += 3;
-                return Ok(Token {
-                    kind: TokenKind::Arrow,
-                    start,
-                    end: self.pos,
-                });
+            if let Some(token) = self.read_edge_op()? {
+                return Ok(token);
             }
 
             if b == b'[' {
@@ -82,6 +80,10 @@ impl<'a> Lexer<'a> {
 
             if b == b'(' {
                 return self.read_round_label();
+            }
+
+            if b == b'{' {
+                return self.read_brace_label();
             }
 
             if is_ident_start(b) {
@@ -111,8 +113,9 @@ impl<'a> Lexer<'a> {
         let text = &self.input[start..self.pos];
         let kind = match text {
             "flowchart" => TokenKind::KwFlowchart,
+            "graph" => TokenKind::KwGraph,
             "TB" => TokenKind::Direction(Direction::TB),
-            "TD" => TokenKind::Direction(Direction::TD),
+            "TD" => TokenKind::Direction(Direction::TB),
             "BT" => TokenKind::Direction(Direction::BT),
             "LR" => TokenKind::Direction(Direction::LR),
             "RL" => TokenKind::Direction(Direction::RL),
@@ -162,6 +165,21 @@ impl<'a> Lexer<'a> {
     fn read_round_label(&mut self) -> Result<Token, ParseError> {
         let start = self.pos;
         let bytes = self.input.as_bytes();
+        if self.pos + 1 < self.len && bytes[self.pos + 1] == b'(' {
+            let search_start = self.pos + 2;
+            if let Some(end_rel) = self.input[search_start..].find("))") {
+                let end = search_start + end_rel;
+                let label = self.input[search_start..end].to_string();
+                self.pos = end + 2;
+                return Ok(Token {
+                    kind: TokenKind::LabelCircle(label),
+                    start,
+                    end: self.pos,
+                });
+            }
+            return Err(ParseError::new("unterminated '(( ))' label".to_string(), start));
+        }
+
         if self.pos + 1 < self.len && bytes[self.pos + 1] == b'"' {
             let search_start = self.pos + 2;
             if let Some(end_rel) = self.input[search_start..].find('"') {
@@ -180,10 +198,131 @@ impl<'a> Lexer<'a> {
             }
             return Err(ParseError::new("unterminated round label".to_string(), start));
         }
-        Err(ParseError::new(
-            "expected '(\"' to start a round label".to_string(),
-            start,
-        ))
+
+        let search_start = self.pos + 1;
+        if let Some(end_rel) = self.input[search_start..].find(')') {
+            let end = search_start + end_rel;
+            let label = self.input[search_start..end].to_string();
+            self.pos = end + 1;
+            return Ok(Token {
+                kind: TokenKind::LabelRound(label),
+                start,
+                end: self.pos,
+            });
+        }
+        Err(ParseError::new("unterminated '( )' label".to_string(), start))
+    }
+
+    fn read_brace_label(&mut self) -> Result<Token, ParseError> {
+        let start = self.pos;
+        let bytes = self.input.as_bytes();
+        if self.pos + 1 < self.len && bytes[self.pos + 1] == b'{' {
+            let search_start = self.pos + 2;
+            if let Some(end_rel) = self.input[search_start..].find("}}") {
+                let end = search_start + end_rel;
+                let label = self.input[search_start..end].to_string();
+                self.pos = end + 2;
+                return Ok(Token {
+                    kind: TokenKind::LabelHexagon(label),
+                    start,
+                    end: self.pos,
+                });
+            }
+            return Err(ParseError::new("unterminated '{{ }}' label".to_string(), start));
+        }
+
+        let search_start = self.pos + 1;
+        if let Some(end_rel) = self.input[search_start..].find('}') {
+            let end = search_start + end_rel;
+            let label = self.input[search_start..end].to_string();
+            self.pos = end + 1;
+            return Ok(Token {
+                kind: TokenKind::LabelDiamond(label),
+                start,
+                end: self.pos,
+            });
+        }
+        Err(ParseError::new("unterminated '{ }' label".to_string(), start))
+    }
+
+    fn read_edge_op(&mut self) -> Result<Option<Token>, ParseError> {
+        let bytes = self.input.as_bytes();
+        if self.pos >= self.len {
+            return Ok(None);
+        }
+        let start = self.pos;
+        match bytes[self.pos] {
+            b'-' => {
+                if self.pos + 3 < self.len
+                    && bytes[self.pos + 1] == b'.'
+                    && bytes[self.pos + 2] == b'-'
+                    && bytes[self.pos + 3] == b'>'
+                {
+                    self.pos += 4;
+                    return Ok(Some(Token {
+                        kind: TokenKind::EdgeOp(EdgeStyle::Dotted, EdgeArrow::Forward),
+                        start,
+                        end: self.pos,
+                    }));
+                }
+                if self.pos + 2 < self.len
+                    && bytes[self.pos + 1] == b'.'
+                    && bytes[self.pos + 2] == b'-'
+                {
+                    self.pos += 3;
+                    return Ok(Some(Token {
+                        kind: TokenKind::EdgeOp(EdgeStyle::Dotted, EdgeArrow::None),
+                        start,
+                        end: self.pos,
+                    }));
+                }
+                if self.pos + 2 < self.len
+                    && bytes[self.pos + 1] == b'-'
+                    && bytes[self.pos + 2] == b'>'
+                {
+                    self.pos += 3;
+                    return Ok(Some(Token {
+                        kind: TokenKind::EdgeOp(EdgeStyle::Solid, EdgeArrow::Forward),
+                        start,
+                        end: self.pos,
+                    }));
+                }
+                if self.pos + 2 < self.len && bytes[self.pos + 1] == b'-' && bytes[self.pos + 2] == b'-' {
+                    self.pos += 3;
+                    return Ok(Some(Token {
+                        kind: TokenKind::EdgeOp(EdgeStyle::Solid, EdgeArrow::None),
+                        start,
+                        end: self.pos,
+                    }));
+                }
+            }
+            b'=' => {
+                if self.pos + 2 < self.len
+                    && bytes[self.pos + 1] == b'='
+                    && bytes[self.pos + 2] == b'>'
+                {
+                    self.pos += 3;
+                    return Ok(Some(Token {
+                        kind: TokenKind::EdgeOp(EdgeStyle::Thick, EdgeArrow::Forward),
+                        start,
+                        end: self.pos,
+                    }));
+                }
+                if self.pos + 2 < self.len
+                    && bytes[self.pos + 1] == b'='
+                    && bytes[self.pos + 2] == b'='
+                {
+                    self.pos += 3;
+                    return Ok(Some(Token {
+                        kind: TokenKind::EdgeOp(EdgeStyle::Thick, EdgeArrow::None),
+                        start,
+                        end: self.pos,
+                    }));
+                }
+            }
+            _ => {}
+        }
+        Ok(None)
     }
 }
 

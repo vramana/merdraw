@@ -1,7 +1,6 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Direction {
     TB,
-    TD,
     BT,
     LR,
     RL,
@@ -12,6 +11,9 @@ pub enum NodeShape {
     Plain,
     Bracket,
     Round,
+    Circle,
+    Diamond,
+    Hexagon,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,10 +24,25 @@ pub struct Node {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeStyle {
+    Solid,
+    Dotted,
+    Thick,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeArrow {
+    None,
+    Forward,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {
     pub from: String,
     pub to: String,
     pub label: Option<String>,
+    pub style: EdgeStyle,
+    pub arrow: EdgeArrow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
