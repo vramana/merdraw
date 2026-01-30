@@ -107,6 +107,12 @@ fn main() {
     println!("{output}");
 }
 
+#[cfg(target_os = "macos")]
+const DEFAULT_DPR: f32 = 2.0;
+
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_DPR: f32 = 1.0;
+
 struct CliOptions {
     input: Option<String>,
     out: Option<PathBuf>,
@@ -127,7 +133,7 @@ fn parse_args(args: Vec<String>) -> CliOptions {
     let mut height = None;
     let mut quality = 85;
     let mut font = None;
-    let mut dpr = 1.0f32;
+    let mut dpr = DEFAULT_DPR;
     let mut debug = false;
 
     let mut iter = args.into_iter();
