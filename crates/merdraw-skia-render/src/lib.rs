@@ -20,6 +20,7 @@ pub struct SkiaRenderOptions {
     pub stroke_width: f32,
     pub font_size: f32,
     pub font_path: Option<PathBuf>,
+    pub device_pixel_ratio: f32,
     pub debug: bool,
 }
 
@@ -34,6 +35,7 @@ impl Default for SkiaRenderOptions {
             stroke_width: 2.0,
             font_size: 16.0,
             font_path: None,
+            device_pixel_ratio: 1.0,
             debug: false,
         }
     }
@@ -64,11 +66,17 @@ pub fn render_to_bytes(
     format: ImageFormat,
     options: &SkiaRenderOptions,
 ) -> Result<Vec<u8>, SkiaRenderError> {
-    let mut surface = surfaces::raster_n32_premul((options.width as i32, options.height as i32))
+    let dpr = options.device_pixel_ratio.max(1.0);
+    let surface_width = (options.width as f32 * dpr).ceil().max(1.0) as i32;
+    let surface_height = (options.height as f32 * dpr).ceil().max(1.0) as i32;
+    let mut surface = surfaces::raster_n32_premul((surface_width, surface_height))
         .ok_or_else(|| SkiaRenderError::EncodeFailed("failed to create surface".to_string()))?;
 
     let canvas = surface.canvas();
     clear_canvas(canvas, options.background);
+    if dpr != 1.0 {
+        canvas.scale((dpr, dpr));
+    }
 
     let transform = compute_transform(layout, options);
 
@@ -76,7 +84,10 @@ pub fn render_to_bytes(
     configure_font(&mut font);
     if options.debug {
         let family = font.typeface().family_name();
-        eprintln!("skia font: {} (size {})", family, options.font_size);
+        eprintln!(
+            "skia font: {} (size {}, dpr {:.2})",
+            family, options.font_size, dpr
+        );
     }
     let text_paint = build_text_paint();
 
@@ -170,9 +181,9 @@ fn load_font(options: &SkiaRenderOptions) -> Result<Font, SkiaRenderError> {
 }
 
 fn configure_font(font: &mut Font) {
-    font.set_edging(Edging::Alias);
+    font.set_edging(Edging::SubpixelAntiAlias);
     font.set_hinting(FontHinting::Full);
-    font.set_subpixel(false);
+    font.set_subpixel(true);
     font.set_baseline_snap(true);
     font.set_force_auto_hinting(true);
 }
@@ -182,6 +193,10 @@ fn build_text_paint() -> Paint {
     paint.set_color(Color::BLACK);
     paint.set_anti_alias(true);
     paint
+}
+
+fn snap_point(value: f32) -> f32 {
+    value.round()
 }
 
 fn draw_subgraphs(
@@ -317,8 +332,8 @@ fn draw_subgraph(
     let label = subgraph.title.as_deref().unwrap_or(subgraph.id.as_str());
     if !label.is_empty() {
         let (_text_width, text_bounds) = font.measure_str(label, Some(text_paint));
-        let text_x = rect.left() + padding;
-        let text_y = rect.top() + padding + text_bounds.height();
+        let text_x = snap_point(rect.left() + padding);
+        let text_y = snap_point(rect.top() + padding + text_bounds.height());
         canvas.draw_str(label, (text_x, text_y), font, text_paint);
     }
 
@@ -404,8 +419,8 @@ fn draw_nodes(
 
         let text = node.label.as_deref().unwrap_or(node.id.as_str());
         let (text_width, text_bounds) = font.measure_str(text, Some(text_paint));
-        let text_x = center.x - text_width / 2.0;
-        let text_y = center.y + text_bounds.height() / 2.0;
+        let text_x = snap_point(center.x - text_width / 2.0);
+        let text_y = snap_point(center.y + text_bounds.height() / 2.0);
         canvas.draw_str(text, (text_x, text_y), font, text_paint);
     }
 
@@ -516,8 +531,8 @@ fn draw_edge_label(
     );
 
     let (text_width, text_bounds) = font.measure_str(label, Some(text_paint));
-    let text_x = label_pos.x - text_width / 2.0;
-    let text_y = label_pos.y + text_bounds.height() / 2.0;
+    let text_x = snap_point(label_pos.x - text_width / 2.0);
+    let text_y = snap_point(label_pos.y + text_bounds.height() / 2.0);
     canvas.draw_str(label, (text_x, text_y), font, text_paint);
 }
 

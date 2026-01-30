@@ -52,6 +52,7 @@ fn main() {
         jpeg_quality: options.quality,
         font_path: options.font,
         debug: options.debug,
+        device_pixel_ratio: options.dpr,
         ..SkiaRenderOptions::default()
     };
     let padding = render_options.padding;
@@ -93,6 +94,7 @@ fn main() {
         } else {
             eprintln!("font path: <default>");
         }
+        eprintln!("device pixel ratio: {:.2}", render_options.device_pixel_ratio);
     }
         if let Err(err) = render_to_file(&layout, format, &render_options, &out_path) {
             eprintln!("render failed: {err:?}");
@@ -113,6 +115,7 @@ struct CliOptions {
     height: Option<u32>,
     quality: u8,
     font: Option<PathBuf>,
+    dpr: f32,
     debug: bool,
 }
 
@@ -124,6 +127,7 @@ fn parse_args(args: Vec<String>) -> CliOptions {
     let mut height = None;
     let mut quality = 85;
     let mut font = None;
+    let mut dpr = 1.0f32;
     let mut debug = false;
 
     let mut iter = args.into_iter();
@@ -165,6 +169,13 @@ fn parse_args(args: Vec<String>) -> CliOptions {
                     font = Some(PathBuf::from(value));
                 }
             }
+            "--dpr" => {
+                if let Some(value) = iter.next() {
+                    if let Ok(parsed) = value.parse::<f32>() {
+                        dpr = parsed.max(0.5);
+                    }
+                }
+            }
             "--debug" => {
                 debug = true;
             }
@@ -184,6 +195,7 @@ fn parse_args(args: Vec<String>) -> CliOptions {
         height,
         quality,
         font,
+        dpr,
         debug,
     }
 }
