@@ -206,6 +206,8 @@ fn draw_subgraphs(
     stroke.set_color(Color::from_argb(255, 90, 90, 90));
     stroke.set_stroke_width(1.5);
 
+    let mut rects = Vec::new();
+    let mut path = Vec::new();
     for subgraph in &layout.subgraphs {
         draw_subgraph(
             canvas,
@@ -216,7 +218,27 @@ fn draw_subgraphs(
             font,
             text_paint,
             &stroke,
+            &mut path,
+            &mut rects,
         );
+    }
+
+    if options.debug {
+        for entry in &rects {
+            let rect = entry.rect;
+            eprintln!(
+                "subgraph: path={} label={} rect=({:.1},{:.1})-({:.1},{:.1}) size=({:.1},{:.1})",
+                entry.path,
+                entry.label,
+                rect.left(),
+                rect.top(),
+                rect.right(),
+                rect.bottom(),
+                rect.width(),
+                rect.height()
+            );
+        }
+        log_subgraph_overlaps(&rects);
     }
 }
 
@@ -229,7 +251,10 @@ fn draw_subgraph(
     font: &Font,
     text_paint: &Paint,
     stroke: &Paint,
+    path: &mut Vec<String>,
+    rects: &mut Vec<SubgraphRect>,
 ) -> Option<skia_safe::Rect> {
+    path.push(subgraph.id.clone());
     let mut rect: Option<skia_safe::Rect> = None;
     let mut has_content = false;
 
@@ -262,6 +287,8 @@ fn draw_subgraph(
             font,
             text_paint,
             stroke,
+            path,
+            rects,
         ) {
             has_content = true;
             rect = Some(match rect {
@@ -272,6 +299,7 @@ fn draw_subgraph(
     }
 
     if !has_content {
+        path.pop();
         return None;
     }
 
@@ -294,6 +322,12 @@ fn draw_subgraph(
         canvas.draw_str(label, (text_x, text_y), font, text_paint);
     }
 
+    rects.push(SubgraphRect {
+        path: path.join("/"),
+        label: label.to_string(),
+        rect,
+    });
+    path.pop();
     Some(rect)
 }
 
@@ -304,6 +338,35 @@ fn union_rect(a: skia_safe::Rect, b: skia_safe::Rect) -> skia_safe::Rect {
         a.right().max(b.right()),
         a.bottom().max(b.bottom()),
     )
+}
+
+#[derive(Debug, Clone)]
+struct SubgraphRect {
+    path: String,
+    label: String,
+    rect: skia_safe::Rect,
+}
+
+fn log_subgraph_overlaps(rects: &[SubgraphRect]) {
+    for i in 0..rects.len() {
+        for j in (i + 1)..rects.len() {
+            let a = &rects[i];
+            let b = &rects[j];
+            if rects_overlap(a.rect, b.rect) {
+                eprintln!(
+                    "warning: subgraph overlap: {} <-> {}",
+                    a.path, b.path
+                );
+            }
+        }
+    }
+}
+
+fn rects_overlap(a: skia_safe::Rect, b: skia_safe::Rect) -> bool {
+    a.left() < b.right()
+        && a.right() > b.left()
+        && a.top() < b.bottom()
+        && a.bottom() > b.top()
 }
 
 fn draw_nodes(
