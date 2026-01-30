@@ -20,14 +20,14 @@ fn main() {
 
     let graph = parse_flowchart(&input).expect("failed to parse flowchart");
     let layout_style = LayoutStyle {
-        min_width: 36.0,
-        min_height: 22.0,
+        min_width: 24.0,
+        min_height: 16.0,
         char_width: 6.0,
         char_height: 10.0,
-        node_padding_x: 10.0,
-        node_padding_y: 7.0,
-        node_gap: 14.0,
-        layer_gap: 24.0,
+        node_padding_x: 6.0,
+        node_padding_y: 4.0,
+        node_gap: 8.0,
+        layer_gap: 12.0,
     };
     let layout = layout_flowchart(&graph, &layout_style);
     let output = render_ascii(&layout, &AsciiRenderOptions::default());

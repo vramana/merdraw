@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use merdraw_layout::{LayoutGraph, LayoutNode};
 
 #[derive(Debug, Clone)]
@@ -33,13 +35,33 @@ pub fn render_ascii(layout: &LayoutGraph, options: &AsciiRenderOptions) -> Strin
 
     let mut grid = vec![vec![' '; grid_width]; grid_height];
 
+    let bounds = build_bounds(&layout.nodes, scale);
+    let mut edge_paths: Vec<Vec<(i32, i32)>> = Vec::new();
+
     // Edges first so nodes appear on top.
     for edge in &layout.edges {
-        for segment in edge.points.windows(2) {
-            let (x1, y1) = map_point(segment[0], scale);
-            let (x2, y2) = map_point(segment[1], scale);
-            draw_line(&mut grid, x1, y1, x2, y2);
+        let mut points: Vec<(i32, i32)> = edge
+            .points
+            .iter()
+            .map(|&point| map_point(point, scale))
+            .collect();
+
+        if points.len() >= 2 {
+            if let Some(bound) = bounds.get(&edge.from) {
+                let next = points[1];
+                points[0] = clip_point(points[0], next, bound);
+            }
+            if let Some(bound) = bounds.get(&edge.to) {
+                let last = points.len() - 1;
+                let prev = points[last - 1];
+                points[last] = clip_point(points[last], prev, bound);
+            }
         }
+
+        for segment in points.windows(2) {
+            draw_line(&mut grid, segment[0].0, segment[0].1, segment[1].0, segment[1].1);
+        }
+        edge_paths.push(points);
     }
 
     for node in &layout.nodes {
@@ -50,8 +72,8 @@ pub fn render_ascii(layout: &LayoutGraph, options: &AsciiRenderOptions) -> Strin
     }
 
     if options.show_arrows {
-        for edge in &layout.edges {
-            draw_arrow(&mut grid, edge.points.as_slice(), scale);
+        for points in &edge_paths {
+            draw_arrow(&mut grid, points);
         }
     }
 
@@ -107,6 +129,68 @@ fn draw_node(grid: &mut [Vec<char>], node: &LayoutNode, scale: f32) {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    left: i32,
+    right: i32,
+    top: i32,
+    bottom: i32,
+}
+
+fn build_bounds(nodes: &[LayoutNode], scale: f32) -> HashMap<String, Bounds> {
+    let mut bounds = HashMap::new();
+    for node in nodes {
+        if node.is_dummy {
+            continue;
+        }
+        let (cx, cy) = map_point((node.x, node.y), scale);
+        let label = node.id.as_str();
+        let min_width = 3usize;
+        let box_width = (label.chars().count() + 2).max(min_width) as i32;
+        let box_height = 3i32;
+
+        let left = cx - box_width / 2;
+        let right = left + box_width - 1;
+        let top = cy - box_height / 2;
+        let bottom = top + box_height - 1;
+
+        bounds.insert(
+            node.id.clone(),
+            Bounds {
+                left,
+                right,
+                top,
+                bottom,
+            },
+        );
+    }
+    bounds
+}
+
+fn clip_point(point: (i32, i32), other: (i32, i32), bounds: &Bounds) -> (i32, i32) {
+    let (mut x, mut y) = point;
+    if x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom {
+        return point;
+    }
+
+    let dx = (other.0 - x).signum();
+    let dy = (other.1 - y).signum();
+    if dx != 0 && dy == 0 {
+        x = if dx > 0 {
+            bounds.right + 1
+        } else {
+            bounds.left - 1
+        };
+    } else if dy != 0 && dx == 0 {
+        y = if dy > 0 {
+            bounds.bottom + 1
+        } else {
+            bounds.top - 1
+        };
+    }
+    (x, y)
+}
+
 fn draw_line(grid: &mut [Vec<char>], x1: i32, y1: i32, x2: i32, y2: i32) {
     if x1 == x2 {
         let (start, end) = if y1 <= y2 { (y1, y2) } else { (y2, y1) };
@@ -159,12 +243,12 @@ fn merge_char(existing: char, incoming: char) -> char {
     }
 }
 
-fn draw_arrow(grid: &mut [Vec<char>], points: &[(f32, f32)], scale: f32) {
+fn draw_arrow(grid: &mut [Vec<char>], points: &[(i32, i32)]) {
     if points.len() < 2 {
         return;
     }
-    let (x2, y2) = map_point(points[points.len() - 1], scale);
-    let (x1, y1) = map_point(points[points.len() - 2], scale);
+    let (x2, y2) = points[points.len() - 1];
+    let (x1, y1) = points[points.len() - 2];
     let dx = (x2 - x1).signum();
     let dy = (y2 - y1).signum();
     if dx == 0 && dy == 0 {
