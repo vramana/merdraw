@@ -51,6 +51,7 @@ fn main() {
         height: 0,
         jpeg_quality: options.quality,
         font_path: options.font,
+        debug: options.debug,
         ..SkiaRenderOptions::default()
     };
     let padding = render_options.padding;
@@ -70,6 +71,29 @@ fn main() {
     };
     render_options.width = width;
     render_options.height = height;
+    if options.debug {
+        let scale_x = ((width as f32 - padding * 2.0) / layout.width.max(1.0)).max(0.1);
+        let scale_y = ((height as f32 - padding * 2.0) / layout.height.max(1.0)).max(0.1);
+        let scale = scale_x.min(scale_y);
+        eprintln!(
+            "layout: nodes={} edges={} subgraphs={} size=({:.1},{:.1}) padding={:.1}",
+            graph.nodes.len(),
+            graph.edges.len(),
+            graph.subgraphs.len(),
+            layout.width,
+            layout.height,
+            padding
+        );
+        eprintln!(
+            "canvas: width={} height={} scale={:.2} (scale_x={:.2}, scale_y={:.2})",
+            width, height, scale, scale_x, scale_y
+        );
+        if let Some(path) = render_options.font_path.as_ref() {
+            eprintln!("font path: {}", path.display());
+        } else {
+            eprintln!("font path: <default>");
+        }
+    }
         if let Err(err) = render_to_file(&layout, format, &render_options, &out_path) {
             eprintln!("render failed: {err:?}");
             std::process::exit(1);
@@ -89,6 +113,7 @@ struct CliOptions {
     height: Option<u32>,
     quality: u8,
     font: Option<PathBuf>,
+    debug: bool,
 }
 
 fn parse_args(args: Vec<String>) -> CliOptions {
@@ -99,6 +124,7 @@ fn parse_args(args: Vec<String>) -> CliOptions {
     let mut height = None;
     let mut quality = 85;
     let mut font = None;
+    let mut debug = false;
 
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -139,6 +165,9 @@ fn parse_args(args: Vec<String>) -> CliOptions {
                     font = Some(PathBuf::from(value));
                 }
             }
+            "--debug" => {
+                debug = true;
+            }
             _ => {
                 if input.is_none() {
                     input = Some(arg);
@@ -155,6 +184,7 @@ fn parse_args(args: Vec<String>) -> CliOptions {
         height,
         quality,
         font,
+        debug,
     }
 }
 

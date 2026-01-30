@@ -20,6 +20,7 @@ pub struct SkiaRenderOptions {
     pub stroke_width: f32,
     pub font_size: f32,
     pub font_path: Option<PathBuf>,
+    pub debug: bool,
 }
 
 impl Default for SkiaRenderOptions {
@@ -33,6 +34,7 @@ impl Default for SkiaRenderOptions {
             stroke_width: 2.0,
             font_size: 16.0,
             font_path: None,
+            debug: false,
         }
     }
 }
@@ -72,6 +74,10 @@ pub fn render_to_bytes(
 
     let mut font = load_font(options)?;
     configure_font(&mut font);
+    if options.debug {
+        let family = font.typeface().family_name();
+        eprintln!("skia font: {} (size {})", family, options.font_size);
+    }
     let text_paint = build_text_paint();
 
     draw_subgraphs(canvas, layout, &transform, options, &font, &text_paint);
