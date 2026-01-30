@@ -65,6 +65,14 @@ pub struct LayoutGraph {
     pub height: f32,
 }
 
+pub fn suggest_canvas_size(layout: &LayoutGraph, padding: f32, scale: f32) -> (u32, u32) {
+    let layout_width = layout.width.max(1.0) * scale;
+    let layout_height = layout.height.max(1.0) * scale;
+    let width = (layout_width + padding * 2.0).ceil().max(1.0) as u32;
+    let height = (layout_height + padding * 2.0).ceil().max(1.0) as u32;
+    (width, height)
+}
+
 #[derive(Debug, Clone)]
 pub struct LayoutSubgraph {
     pub id: String,
