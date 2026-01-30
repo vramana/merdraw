@@ -1,0 +1,9 @@
+flowchart TB
+subgraph group1 "Outer Group"
+A[Alpha] --> B[Beta]
+subgraph inner "Inner Cluster"
+C[Gamma] --> D[Delta]
+end
+B --> C
+end
+A --> D

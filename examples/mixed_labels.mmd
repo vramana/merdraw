@@ -1,0 +1,6 @@
+flowchart TB
+A[Input] -->|parse| B[Parser]
+B --> C{Valid?}
+C -->|yes| D[Layout]
+C -->|no| E[Error]
+D --> F[Render]
