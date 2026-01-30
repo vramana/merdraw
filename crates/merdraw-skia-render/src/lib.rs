@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use merdraw_layout::{LayoutEdge, LayoutGraph};
 use skia_safe::{
     surfaces, Canvas, Color, EncodedImageFormat, Font, FontMgr, FontStyle, Paint, PaintStyle,
-    PathBuilder, Point,
+    PathBuilder, Point, FontHinting, font::Edging,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -149,8 +149,9 @@ fn draw_nodes(
 
     let mut text_paint = Paint::default();
     text_paint.set_color(Color::BLACK);
+    text_paint.set_anti_alias(true);
 
-    let font = if let Some(path) = options.font_path.as_ref() {
+    let mut font = if let Some(path) = options.font_path.as_ref() {
         let data = fs::read(path).map_err(|err| {
             SkiaRenderError::FontLoadFailed(format!("failed to read font {path:?}: {err}"))
         })?;
@@ -177,6 +178,12 @@ fn draw_nodes(
         }
         font
     };
+
+    font.set_edging(Edging::Alias);
+    font.set_hinting(FontHinting::Full);
+    font.set_subpixel(false);
+    font.set_baseline_snap(true);
+    font.set_force_auto_hinting(true);
 
     for node in &layout.nodes {
         if node.is_dummy {
