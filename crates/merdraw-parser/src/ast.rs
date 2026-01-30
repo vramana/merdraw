@@ -50,6 +50,7 @@ pub struct Graph {
     pub direction: Direction,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    pub subgraphs: Vec<Subgraph>,
 }
 
 impl Graph {
@@ -58,6 +59,32 @@ impl Graph {
             direction,
             nodes: Vec::new(),
             edges: Vec::new(),
+            subgraphs: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subgraph {
+    pub id: String,
+    pub title: Option<String>,
+    pub nodes: Vec<String>,
+    pub subgraphs: Vec<Subgraph>,
+}
+
+impl Subgraph {
+    pub fn new(id: String, title: Option<String>) -> Self {
+        Self {
+            id,
+            title,
+            nodes: Vec::new(),
+            subgraphs: Vec::new(),
+        }
+    }
+
+    pub fn add_node(&mut self, id: &str) {
+        if !self.nodes.iter().any(|existing| existing == id) {
+            self.nodes.push(id.to_string());
         }
     }
 }

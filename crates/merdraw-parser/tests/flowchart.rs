@@ -110,3 +110,30 @@ fn errors_on_missing_header() {
 fn errors_on_bad_arrow() {
     assert!(parse_flowchart("flowchart TB\nA--B\n").is_err());
 }
+
+#[test]
+fn parses_chained_edges() {
+    let input = "flowchart TB\nA-->B-->C\n";
+    let graph = parse_flowchart(input).expect("parse failed");
+    assert_eq!(graph.edges.len(), 2);
+    assert_eq!(graph.edges[0].from, "A");
+    assert_eq!(graph.edges[0].to, "B");
+    assert_eq!(graph.edges[1].from, "B");
+    assert_eq!(graph.edges[1].to, "C");
+}
+
+#[test]
+fn parses_subgraphs() {
+    let input = "flowchart TB\nsubgraph group1\nA-->B-->C\nsubgraph inner\nD\nend\nend\n";
+    let graph = parse_flowchart(input).expect("parse failed");
+    assert_eq!(graph.subgraphs.len(), 1);
+    let outer = &graph.subgraphs[0];
+    assert_eq!(outer.id, "group1");
+    assert!(outer.nodes.contains(&"A".to_string()));
+    assert!(outer.nodes.contains(&"B".to_string()));
+    assert!(outer.nodes.contains(&"C".to_string()));
+    assert_eq!(outer.subgraphs.len(), 1);
+    let inner = &outer.subgraphs[0];
+    assert_eq!(inner.id, "inner");
+    assert!(inner.nodes.contains(&"D".to_string()));
+}

@@ -2,7 +2,7 @@ mod ast;
 mod lexer;
 mod parser;
 
-pub use ast::{Direction, Edge, EdgeArrow, EdgeStyle, Graph, Node, NodeShape};
+pub use ast::{Direction, Edge, EdgeArrow, EdgeStyle, Graph, Node, NodeShape, Subgraph};
 pub use parser::parse_flowchart;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

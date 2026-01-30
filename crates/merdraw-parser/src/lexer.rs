@@ -4,6 +4,8 @@ use crate::{Direction, EdgeArrow, EdgeStyle, ParseError};
 pub enum TokenKind {
     KwFlowchart,
     KwGraph,
+    KwSubgraph,
+    KwEnd,
     Direction(Direction),
     Ident(String),
     EdgeOp(EdgeStyle, EdgeArrow),
@@ -119,6 +121,8 @@ impl<'a> Lexer<'a> {
             "BT" => TokenKind::Direction(Direction::BT),
             "LR" => TokenKind::Direction(Direction::LR),
             "RL" => TokenKind::Direction(Direction::RL),
+            "subgraph" => TokenKind::KwSubgraph,
+            "end" => TokenKind::KwEnd,
             _ => TokenKind::Ident(text.to_string()),
         };
         Ok(Token {
