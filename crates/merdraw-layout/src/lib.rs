@@ -65,12 +65,35 @@ pub struct LayoutGraph {
     pub height: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct LayoutSubgraphBounds {
+    pub path: String,
+    pub label: String,
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
 pub fn suggest_canvas_size(layout: &LayoutGraph, padding: f32, scale: f32) -> (u32, u32) {
     let layout_width = layout.width.max(1.0) * scale;
     let layout_height = layout.height.max(1.0) * scale;
     let width = (layout_width + padding * 2.0).ceil().max(1.0) as u32;
     let height = (layout_height + padding * 2.0).ceil().max(1.0) as u32;
     (width, height)
+}
+
+pub fn subgraph_bounds(layout: &LayoutGraph, padding: f32) -> Vec<LayoutSubgraphBounds> {
+    let mut node_map = HashMap::new();
+    for node in &layout.nodes {
+        node_map.insert(node.id.as_str(), node);
+    }
+    let mut bounds = Vec::new();
+    let mut path = Vec::new();
+    for subgraph in &layout.subgraphs {
+        collect_subgraph_bounds(subgraph, &node_map, padding, &mut path, &mut bounds);
+    }
+    bounds
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +256,87 @@ fn collect_group_paths(
         }
         collect_group_paths(&subgraph.subgraphs, prefix, map);
         prefix.pop();
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Bounds {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+fn collect_subgraph_bounds(
+    subgraph: &LayoutSubgraph,
+    node_map: &HashMap<&str, &LayoutNode>,
+    padding: f32,
+    path: &mut Vec<String>,
+    out: &mut Vec<LayoutSubgraphBounds>,
+) -> Option<Bounds> {
+    path.push(subgraph.id.clone());
+    let mut bounds: Option<Bounds> = None;
+    let mut has_content = false;
+
+    for node_id in &subgraph.nodes {
+        if let Some(node) = node_map.get(node_id.as_str()) {
+            has_content = true;
+            let node_bounds = Bounds {
+                left: node.x - node.width / 2.0,
+                right: node.x + node.width / 2.0,
+                top: node.y - node.height / 2.0,
+                bottom: node.y + node.height / 2.0,
+            };
+            bounds = Some(match bounds {
+                Some(existing) => union_bounds(existing, node_bounds),
+                None => node_bounds,
+            });
+        }
+    }
+
+    for child in &subgraph.subgraphs {
+        if let Some(child_bounds) =
+            collect_subgraph_bounds(child, node_map, padding, path, out)
+        {
+            has_content = true;
+            bounds = Some(match bounds {
+                Some(existing) => union_bounds(existing, child_bounds),
+                None => child_bounds,
+            });
+        }
+    }
+
+    if !has_content {
+        path.pop();
+        return None;
+    }
+
+    let mut bounds = bounds.unwrap();
+    bounds.left -= padding;
+    bounds.right += padding;
+    bounds.top -= padding;
+    bounds.bottom += padding;
+
+    let label = subgraph.title.as_deref().unwrap_or(subgraph.id.as_str());
+    out.push(LayoutSubgraphBounds {
+        path: path.join("/"),
+        label: label.to_string(),
+        left: bounds.left,
+        top: bounds.top,
+        right: bounds.right,
+        bottom: bounds.bottom,
+    });
+
+    path.pop();
+    Some(bounds)
+}
+
+fn union_bounds(a: Bounds, b: Bounds) -> Bounds {
+    Bounds {
+        left: a.left.min(b.left),
+        top: a.top.min(b.top),
+        right: a.right.max(b.right),
+        bottom: a.bottom.max(b.bottom),
     }
 }
 
