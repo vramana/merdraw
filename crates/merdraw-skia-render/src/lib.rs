@@ -1,9 +1,10 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use merdraw_layout::{LayoutEdge, LayoutGraph};
 use skia_safe::{
-    surfaces, Canvas, Color, EncodedImageFormat, Font, Paint, PaintStyle, PathBuilder, Point,
+    surfaces, Canvas, Color, EncodedImageFormat, Font, FontMgr, FontStyle, Paint, PaintStyle,
+    PathBuilder, Point,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +19,7 @@ pub struct SkiaRenderOptions {
     pub padding: f32,
     pub stroke_width: f32,
     pub font_size: f32,
+    pub font_path: Option<PathBuf>,
 }
 
 impl Default for SkiaRenderOptions {
@@ -30,6 +32,7 @@ impl Default for SkiaRenderOptions {
             padding: 24.0,
             stroke_width: 2.0,
             font_size: 16.0,
+            font_path: None,
         }
     }
 }
@@ -45,6 +48,7 @@ pub enum SkiaRenderError {
     EncodeUnsupported(&'static str),
     EncodeFailed(String),
     Io(std::io::Error),
+    FontLoadFailed(String),
 }
 
 impl From<std::io::Error> for SkiaRenderError {
@@ -67,14 +71,14 @@ pub fn render_to_bytes(
     let transform = compute_transform(layout, options);
 
     draw_edges(canvas, layout, &transform, options);
-    draw_nodes(canvas, layout, &transform, options);
+    draw_nodes(canvas, layout, &transform, options)?;
 
     let image = surface.image_snapshot();
     let (encoded, label) = match format {
-        ImageFormat::Png => (image.encode_to_data(EncodedImageFormat::PNG), "PNG"),
+        ImageFormat::Png => (image.encode(None, EncodedImageFormat::PNG, 100), "PNG"),
         ImageFormat::Jpeg { quality } => {
             let q = quality.clamp(0, 100) as u32;
-            (image.encode_to_data_with_quality(EncodedImageFormat::JPEG, q), "JPEG")
+            (image.encode(None, EncodedImageFormat::JPEG, q), "JPEG")
         }
     };
 
@@ -128,7 +132,12 @@ fn clear_canvas(canvas: &Canvas, background: SkiaColor) {
     canvas.clear(Color::from_argb(background.3, background.0, background.1, background.2));
 }
 
-fn draw_nodes(canvas: &Canvas, layout: &LayoutGraph, transform: &Transform, options: &SkiaRenderOptions) {
+fn draw_nodes(
+    canvas: &Canvas,
+    layout: &LayoutGraph,
+    transform: &Transform,
+    options: &SkiaRenderOptions,
+) -> Result<(), SkiaRenderError> {
     let mut stroke = Paint::default();
     stroke.set_style(PaintStyle::Stroke);
     stroke.set_color(Color::BLACK);
@@ -138,10 +147,36 @@ fn draw_nodes(canvas: &Canvas, layout: &LayoutGraph, transform: &Transform, opti
     fill.set_style(PaintStyle::Fill);
     fill.set_color(Color::WHITE);
 
-    let mut font = Font::default();
-    font.set_size(options.font_size);
     let mut text_paint = Paint::default();
     text_paint.set_color(Color::BLACK);
+
+    let font = if let Some(path) = options.font_path.as_ref() {
+        let data = fs::read(path).map_err(|err| {
+            SkiaRenderError::FontLoadFailed(format!("failed to read font {path:?}: {err}"))
+        })?;
+        let font_mgr = FontMgr::new();
+        let typeface = font_mgr
+            .new_from_data(&data, 0)
+            .ok_or_else(|| SkiaRenderError::FontLoadFailed(format!("failed to load font {path:?}")))?;
+        Font::from_typeface(typeface, options.font_size)
+    } else {
+        let mut font = Font::default();
+        font.set_size(options.font_size);
+        let font_mgr = FontMgr::new();
+        let style = FontStyle::default();
+        let candidates = ["SF Mono", "Menlo", "Monaco", "Courier New", "Courier"];
+        let mut selected = None;
+        for family in candidates {
+            if let Some(typeface) = font_mgr.match_family_style(family, style) {
+                selected = Some(typeface);
+                break;
+            }
+        }
+        if let Some(typeface) = selected {
+            font.set_typeface(typeface);
+        }
+        font
+    };
 
     for node in &layout.nodes {
         if node.is_dummy {
@@ -165,6 +200,8 @@ fn draw_nodes(canvas: &Canvas, layout: &LayoutGraph, transform: &Transform, opti
         let text_y = center.y + text_bounds.height() / 2.0;
         canvas.draw_str(text, (text_x, text_y), &font, &text_paint);
     }
+
+    Ok(())
 }
 
 fn draw_edges(canvas: &Canvas, layout: &LayoutGraph, transform: &Transform, options: &SkiaRenderOptions) {
@@ -183,7 +220,7 @@ fn draw_edge_path(
     edge: &LayoutEdge,
     transform: &Transform,
     paint: &Paint,
-    options: &SkiaRenderOptions,
+    _options: &SkiaRenderOptions,
 ) {
     if edge.points.is_empty() {
         return;
@@ -198,7 +235,7 @@ fn draw_edge_path(
     let path = builder.detach();
     canvas.draw_path(&path, paint);
 
-    draw_arrowhead(canvas, edge, transform, options);
+    draw_arrowhead(canvas, edge, transform, _options);
 }
 
 fn draw_arrowhead(canvas: &Canvas, edge: &LayoutEdge, transform: &Transform, options: &SkiaRenderOptions) {

@@ -50,6 +50,7 @@ fn main() {
             width: options.width,
             height: options.height,
             jpeg_quality: options.quality,
+            font_path: options.font,
             ..SkiaRenderOptions::default()
         };
         if let Err(err) = render_to_file(&layout, format, &render_options, &out_path) {
@@ -70,6 +71,7 @@ struct CliOptions {
     width: u32,
     height: u32,
     quality: u8,
+    font: Option<PathBuf>,
 }
 
 fn parse_args(args: Vec<String>) -> CliOptions {
@@ -79,6 +81,7 @@ fn parse_args(args: Vec<String>) -> CliOptions {
     let mut width = 1024;
     let mut height = 768;
     let mut quality = 85;
+    let mut font = None;
 
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -114,6 +117,11 @@ fn parse_args(args: Vec<String>) -> CliOptions {
                     }
                 }
             }
+            "--font" => {
+                if let Some(value) = iter.next() {
+                    font = Some(PathBuf::from(value));
+                }
+            }
             _ => {
                 if input.is_none() {
                     input = Some(arg);
@@ -129,6 +137,7 @@ fn parse_args(args: Vec<String>) -> CliOptions {
         width,
         height,
         quality,
+        font,
     }
 }
 
