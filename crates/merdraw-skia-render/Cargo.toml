@@ -1,10 +1,12 @@
 [package]
-name = "merdraw"
+name = "merdraw-skia-render"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+skia-safe = "0.91.1"
+merdraw-layout = { path = "../merdraw-layout" }
+
+[dev-dependencies]
 merdraw-parser = { path = "../merdraw-parser" }
 merdraw-layout = { path = "../merdraw-layout" }
-merdraw-ascii-render = { path = "../merdraw-ascii-render" }
-merdraw-skia-render = { path = "../merdraw-skia-render" }

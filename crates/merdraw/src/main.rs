@@ -1,25 +1,20 @@
 use std::env;
 use std::fs;
 use std::io::{self, Read};
+use std::path::PathBuf;
 
 use merdraw_ascii_render::{render_ascii, AsciiRenderOptions};
 use merdraw_layout::{layout_flowchart, LayoutStyle};
 use merdraw_parser::parse_flowchart;
+use merdraw_skia_render::{render_to_file, ImageFormat, SkiaRenderOptions};
 
 fn main() {
-    let input = match env::args().nth(1) {
-        Some(path) => fs::read_to_string(path).expect("failed to read input file"),
-        None => {
-            let mut buffer = String::new();
-            io::stdin()
-                .read_to_string(&mut buffer)
-                .expect("failed to read stdin");
-            buffer
-        }
-    };
+    let options = parse_args(env::args().skip(1).collect());
+    let input = read_input(options.input.as_deref());
 
     let graph = parse_flowchart(&input).expect("failed to parse flowchart");
-    let layout_style = LayoutStyle {
+
+    let ascii_layout_style = LayoutStyle {
         min_width: 24.0,
         min_height: 16.0,
         char_width: 6.0,
@@ -29,7 +24,132 @@ fn main() {
         node_gap: 8.0,
         layer_gap: 12.0,
     };
+
+    let layout_style = if options.out.is_some() {
+        LayoutStyle::default()
+    } else {
+        ascii_layout_style
+    };
+
     let layout = layout_flowchart(&graph, &layout_style);
+
+    if let Some(out_path) = options.out {
+        let format = match options.format.as_deref() {
+            Some("png") => ImageFormat::Png,
+            Some("jpg") | Some("jpeg") => ImageFormat::Jpeg {
+                quality: options.quality,
+            },
+            Some(other) => {
+                eprintln!("unsupported format: {other}");
+                std::process::exit(1);
+            }
+            None => infer_format_from_path(&out_path).unwrap_or(ImageFormat::Png),
+        };
+
+        let render_options = SkiaRenderOptions {
+            width: options.width,
+            height: options.height,
+            jpeg_quality: options.quality,
+            ..SkiaRenderOptions::default()
+        };
+        if let Err(err) = render_to_file(&layout, format, &render_options, &out_path) {
+            eprintln!("render failed: {err:?}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let output = render_ascii(&layout, &AsciiRenderOptions::default());
     println!("{output}");
+}
+
+struct CliOptions {
+    input: Option<String>,
+    out: Option<PathBuf>,
+    format: Option<String>,
+    width: u32,
+    height: u32,
+    quality: u8,
+}
+
+fn parse_args(args: Vec<String>) -> CliOptions {
+    let mut input = None;
+    let mut out = None;
+    let mut format = None;
+    let mut width = 1024;
+    let mut height = 768;
+    let mut quality = 85;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--out" => {
+                if let Some(path) = iter.next() {
+                    out = Some(PathBuf::from(path));
+                }
+            }
+            "--format" => {
+                if let Some(value) = iter.next() {
+                    format = Some(value.to_lowercase());
+                }
+            }
+            "--width" => {
+                if let Some(value) = iter.next() {
+                    if let Ok(parsed) = value.parse() {
+                        width = parsed;
+                    }
+                }
+            }
+            "--height" => {
+                if let Some(value) = iter.next() {
+                    if let Ok(parsed) = value.parse() {
+                        height = parsed;
+                    }
+                }
+            }
+            "--quality" => {
+                if let Some(value) = iter.next() {
+                    if let Ok(parsed) = value.parse() {
+                        quality = parsed;
+                    }
+                }
+            }
+            _ => {
+                if input.is_none() {
+                    input = Some(arg);
+                }
+            }
+        }
+    }
+
+    CliOptions {
+        input,
+        out,
+        format,
+        width,
+        height,
+        quality,
+    }
+}
+
+fn read_input(path: Option<&str>) -> String {
+    match path {
+        Some("-") | None => {
+            let mut buffer = String::new();
+            io::stdin()
+                .read_to_string(&mut buffer)
+                .expect("failed to read stdin");
+            buffer
+        }
+        Some(path) => fs::read_to_string(path).expect("failed to read input file"),
+    }
+}
+
+fn infer_format_from_path(path: &PathBuf) -> Option<ImageFormat> {
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    match ext.as_str() {
+        "png" => Some(ImageFormat::Png),
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg { quality: 85 }),
+        _ => None,
+    }
 }
