@@ -10,5 +10,5 @@ fn renders_basic_ascii() {
     assert!(output.contains("A"));
     assert!(output.contains("B"));
     assert!(output.contains("C"));
-    assert!(output.contains("+"));
+    assert!(output.contains("*"));
 }
