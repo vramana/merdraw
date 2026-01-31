@@ -510,12 +510,15 @@ fn draw_edges(
         draw_edge_path(canvas, edge, transform, &paint, options);
     }
 
-    let mut avoid_rects = collect_node_rects(layout, transform);
-    for rect in subgraph_rects {
-        avoid_rects.push(rect.rect);
-    }
+    let base_avoid = collect_node_rects(layout, transform);
     let mut placed = Vec::new();
     for edge in &layout.edges {
+        let mut avoid_rects = base_avoid.clone();
+        if edge.is_cross {
+            for rect in subgraph_rects {
+                avoid_rects.push(rect.rect);
+            }
+        }
         draw_edge_label(
             canvas,
             edge,
@@ -576,87 +579,195 @@ fn draw_edge_label(
         .iter()
         .map(|&point| transform_point(point, transform))
         .collect();
-    let total_length = polyline_length(&points);
-    if total_length <= f32::EPSILON {
-        return;
-    }
-
-    let target = total_length / 2.0;
-    let mut accumulated = 0.0;
-    let mut label_pos = points[0];
-    let mut direction = Point::new(1.0, 0.0);
-
+    let (text_width, text_bounds) = font.measure_str(label, Some(text_paint));
+    let mut best_segment = None;
+    let mut best_len = 0.0f32;
+    let mut best_is_horizontal = false;
     for segment in points.windows(2) {
         let start = segment[0];
         let end = segment[1];
+        let dx = (end.x - start.x).abs();
+        let dy = (end.y - start.y).abs();
         let segment_len = segment_length(start, end);
         if segment_len <= f32::EPSILON {
             continue;
         }
-        if accumulated + segment_len >= target {
-            let t = (target - accumulated) / segment_len;
-            label_pos = Point::new(
-                start.x + (end.x - start.x) * t,
-                start.y + (end.y - start.y) * t,
-            );
-            direction = Point::new(end.x - start.x, end.y - start.y);
+        let is_horizontal = dy <= dx * 0.3;
+        if edge.is_cross && is_horizontal && segment_len >= text_width + 8.0 {
+            best_segment = Some((start, end));
             break;
         }
-        accumulated += segment_len;
+        if !edge.is_cross {
+            let use_segment = if is_horizontal && !best_is_horizontal {
+                true
+            } else if is_horizontal == best_is_horizontal {
+                segment_len > best_len
+            } else {
+                false
+            };
+            if use_segment {
+                best_len = segment_len;
+                best_is_horizontal = is_horizontal;
+                best_segment = Some((start, end));
+            }
+        }
     }
+
+    let (segment_start, segment_end, direction) = if let Some((start, end)) = best_segment {
+        let dir = Point::new(end.x - start.x, end.y - start.y);
+        (start, end, dir)
+    } else {
+        return;
+    };
 
     let mut normal = Point::new(0.0, -1.0);
     if direction.x.abs() < direction.y.abs() {
         normal = Point::new(1.0, 0.0);
     }
     let offset = options.stroke_width * 4.0 + 6.0;
-    label_pos = Point::new(
-        label_pos.x + normal.x * offset,
-        label_pos.y + normal.y * offset,
-    );
-
-    let (text_width, text_bounds) = font.measure_str(label, Some(text_paint));
     let text_height = text_bounds.height().max(options.font_size);
-    let base_center = Point::new(label_pos.x, label_pos.y);
     let normal = normalize_point(normal);
     let step = text_height + options.stroke_width * 2.0 + 4.0;
     let max_steps = 6;
 
-    let mut chosen = None;
-    for offset_idx in 0..=max_steps * 2 {
-        let k = (offset_idx + 1) / 2;
-        let sign = if offset_idx == 0 {
-            0.0
-        } else if offset_idx % 2 == 1 {
-            1.0
-        } else {
-            -1.0
-        };
-        let offset = sign * k as f32 * step;
-        let center = Point::new(
-            base_center.x + normal.x * offset,
-            base_center.y + normal.y * offset,
+    if edge.from == edge.to {
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_y = f32::MAX;
+        for point in &points {
+            min_x = min_x.min(point.x);
+            max_x = max_x.max(point.x);
+            min_y = min_y.min(point.y);
+        }
+        let base_center = Point::new((min_x + max_x) / 2.0, min_y - offset);
+        let mut chosen = None;
+        for i in 0..=max_steps {
+            let center = Point::new(base_center.x, base_center.y - i as f32 * step);
+            let rect = centered_rect(center, text_width, text_height);
+            if !rects_intersect_any(rect, avoid_rects) && !rects_intersect_any(rect, placed) {
+                chosen = Some((center, rect));
+                break;
+            }
+        }
+        let (center, rect) =
+            chosen.unwrap_or((base_center, centered_rect(base_center, text_width, text_height)));
+        let mut label_bg = Paint::default();
+        label_bg.set_style(PaintStyle::Fill);
+        label_bg.set_color(Color::from_argb(
+            options.background.3,
+            options.background.0,
+            options.background.1,
+            options.background.2,
+        ));
+        let pad = 4.0;
+        let bg_rect = skia_safe::Rect::from_xywh(
+            rect.left() - pad,
+            rect.top() - pad,
+            rect.width() + pad * 2.0,
+            rect.height() + pad * 2.0,
         );
-        let rect = centered_rect(center, text_width, text_height);
-        if !rects_intersect_any(rect, avoid_rects) && !rects_intersect_any(rect, placed) {
-            chosen = Some((center, rect));
+        canvas.draw_rect(bg_rect, &label_bg);
+
+        let text_x = snap_point(center.x - text_width / 2.0);
+        let text_y = snap_point(center.y + text_height / 2.0);
+        canvas.draw_str(label, (text_x, text_y), font, text_paint);
+        placed.push(rect);
+        return;
+    }
+
+    let mut candidate_centers = Vec::new();
+    if edge.is_cross {
+        let ts = [0.5f32, 0.35, 0.65, 0.2, 0.8];
+        for t in ts {
+            let base = Point::new(
+                segment_start.x + (segment_end.x - segment_start.x) * t,
+                segment_start.y + (segment_end.y - segment_start.y) * t,
+            );
+            candidate_centers.push(base);
+        }
+    } else {
+        let base = Point::new(
+            (segment_start.x + segment_end.x) / 2.0,
+            (segment_start.y + segment_end.y) / 2.0,
+        );
+        candidate_centers.push(base);
+    }
+
+    let mut chosen = None;
+    for base_center in &candidate_centers {
+        let base_center = *base_center;
+        let mut found = None;
+        if edge.is_cross {
+            for offset_idx in 0..=max_steps {
+                let offset = offset + offset_idx as f32 * step;
+                let center = Point::new(
+                    base_center.x + normal.x * offset,
+                    base_center.y + normal.y * offset,
+                );
+                let rect = centered_rect(center, text_width, text_height);
+                if !rects_intersect_any(rect, avoid_rects) && !rects_intersect_any(rect, placed) {
+                    found = Some((center, rect));
+                    break;
+                }
+            }
+        } else {
+            for offset_idx in 0..=max_steps * 2 {
+                let k = (offset_idx + 1) / 2;
+                let sign = if offset_idx == 0 {
+                    0.0
+                } else if offset_idx % 2 == 1 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let offset = sign * k as f32 * step + offset;
+                let center = Point::new(
+                    base_center.x + normal.x * offset,
+                    base_center.y + normal.y * offset,
+                );
+                let rect = centered_rect(center, text_width, text_height);
+                if !rects_intersect_any(rect, avoid_rects) && !rects_intersect_any(rect, placed) {
+                    found = Some((center, rect));
+                    break;
+                }
+            }
+        }
+        if found.is_some() {
+            chosen = found;
             break;
         }
     }
 
-    let (center, rect) = chosen
-        .unwrap_or((base_center, centered_rect(base_center, text_width, text_height)));
+    let fallback_center = candidate_centers
+        .first()
+        .copied()
+        .unwrap_or(Point::new(
+            (segment_start.x + segment_end.x) / 2.0,
+            (segment_start.y + segment_end.y) / 2.0,
+        ));
+    let (center, rect) =
+        chosen.unwrap_or((fallback_center, centered_rect(fallback_center, text_width, text_height)));
+    let mut label_bg = Paint::default();
+    label_bg.set_style(PaintStyle::Fill);
+    label_bg.set_color(Color::from_argb(
+        options.background.3,
+        options.background.0,
+        options.background.1,
+        options.background.2,
+    ));
+    let pad = 4.0;
+    let bg_rect = skia_safe::Rect::from_xywh(
+        rect.left() - pad,
+        rect.top() - pad,
+        rect.width() + pad * 2.0,
+        rect.height() + pad * 2.0,
+    );
+    canvas.draw_rect(bg_rect, &label_bg);
+
     let text_x = snap_point(center.x - text_width / 2.0);
     let text_y = snap_point(center.y + text_height / 2.0);
     canvas.draw_str(label, (text_x, text_y), font, text_paint);
     placed.push(rect);
-}
-
-fn polyline_length(points: &[Point]) -> f32 {
-    points
-        .windows(2)
-        .map(|segment| segment_length(segment[0], segment[1]))
-        .sum()
 }
 
 fn segment_length(start: Point, end: Point) -> f32 {

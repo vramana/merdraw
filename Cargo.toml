@@ -6,4 +6,5 @@ members = [
     "crates/merdraw-ascii-render",
     "crates/merdraw-skia-render",
     "crates/merdraw",
+    "crates/merdraw-preview",
 ]

@@ -1,7 +1,7 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use merdraw_parser::{
-    Direction, EdgeArrow, EdgeStyle, Graph, Node as ParsedNode, NodeShape, Subgraph,
+    Direction, Edge, EdgeArrow, EdgeStyle, Graph, Node as ParsedNode, NodeShape, Subgraph,
 };
 
 #[derive(Debug, Clone)]
@@ -49,6 +49,7 @@ pub struct LayoutNode {
 pub struct LayoutEdge {
     pub from: String,
     pub to: String,
+    pub is_cross: bool,
     pub label: Option<String>,
     pub style: EdgeStyle,
     pub arrow: EdgeArrow,
@@ -144,13 +145,26 @@ struct UnitEdge {
 }
 
 pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
+    if graph.subgraphs.is_empty() {
+        return layout_flowchart_flat(graph, style, None);
+    }
+    layout_flowchart_grouped(graph, style)
+}
+
+fn layout_flowchart_flat(
+    graph: &Graph,
+    style: &LayoutStyle,
+    size_overrides: Option<&HashMap<String, (f32, f32)>>,
+) -> LayoutGraph {
     let mut nodes = Vec::new();
     let mut node_index = HashMap::new();
     let mut group_paths = HashMap::new();
     collect_group_paths(&graph.subgraphs, &mut Vec::new(), &mut group_paths);
 
     for node in &graph.nodes {
-        let (width, height) = estimate_node_size(node, style);
+        let (width, height) = size_overrides
+            .and_then(|map| map.get(&node.id).copied())
+            .unwrap_or_else(|| estimate_node_size(node, style));
         let idx = nodes.len();
         let group_key = group_paths.get(&node.id).cloned().unwrap_or_default();
         nodes.push(WorkNode {
@@ -186,6 +200,9 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
     }
 
     make_acyclic(&mut edges, nodes.len());
+    if size_overrides.is_none() {
+        adjust_node_sizes_for_ports(&mut nodes, &edges, style, graph.direction.clone());
+    }
     assign_layers(&mut nodes, &edges);
 
     let (mut chains, unit_edges) = insert_dummy_nodes(&mut nodes, &edges);
@@ -193,7 +210,10 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
     let mut layers = build_layers(&mut nodes);
     reduce_crossings(&mut nodes, &mut layers, &unit_edges, 6);
     let direction = graph.direction.clone();
-    assign_coordinates(&mut nodes, &layers, style, direction.clone());
+    let mut effective_style = style.clone();
+    effective_style.layer_gap = compute_layer_gap(&nodes, &edges, style, direction.clone());
+    assign_coordinates(&mut nodes, &layers, &effective_style, direction.clone());
+    expand_layer_gaps(&mut nodes, &edges, &effective_style, direction.clone());
     separate_subgraphs(&mut nodes, graph, style, direction.clone());
 
     let (width, height) = compute_graph_extent(&nodes, direction.clone());
@@ -202,7 +222,7 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
         &edges,
         &mut chains,
         direction,
-        style,
+        &effective_style,
     );
     let layout_subgraphs = graph
         .subgraphs
@@ -233,6 +253,331 @@ pub fn layout_flowchart(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
     }
 }
 
+#[derive(Debug, Clone)]
+struct GroupLayout {
+    id: String,
+    title: Option<String>,
+    node_ids: Vec<String>,
+    layout: LayoutGraph,
+    width: f32,
+    height: f32,
+    padding_x: f32,
+    padding_y: f32,
+    title_height: f32,
+    is_virtual: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CrossEdge {
+    edge: Edge,
+    from: LayoutNode,
+    to: LayoutNode,
+    forward: bool,
+}
+
+fn layout_flowchart_grouped(graph: &Graph, style: &LayoutStyle) -> LayoutGraph {
+    let mut group_nodes: Vec<GroupLayout> = Vec::new();
+    let mut node_to_group: HashMap<String, usize> = HashMap::new();
+    let mut assigned: HashSet<String> = HashSet::new();
+
+    for subgraph in &graph.subgraphs {
+        let mut node_ids = Vec::new();
+        collect_subgraph_nodes(subgraph, &mut node_ids);
+        node_ids.sort();
+        node_ids.dedup();
+        for node_id in &node_ids {
+            assigned.insert(node_id.clone());
+        }
+
+        let group_graph = build_subgraph_graph(graph, &node_ids);
+        let layout = layout_flowchart_flat(&group_graph, style, None);
+        let padding_x = style.node_padding_x * 2.0;
+        let padding_y = style.node_padding_y * 2.0;
+        let title_height = style.char_height + style.node_padding_y * 2.0;
+        let width = layout.width + padding_x * 2.0;
+        let height = layout.height + padding_y * 2.0 + title_height;
+
+        let group_index = group_nodes.len();
+        for node_id in &node_ids {
+            node_to_group.insert(node_id.clone(), group_index);
+        }
+        group_nodes.push(GroupLayout {
+            id: subgraph.id.clone(),
+            title: subgraph.title.clone(),
+            node_ids,
+            layout,
+            width,
+            height,
+            padding_x,
+            padding_y,
+            title_height,
+            is_virtual: false,
+        });
+    }
+
+    for node in &graph.nodes {
+        if assigned.contains(&node.id) {
+            continue;
+        }
+        let node_ids = vec![node.id.clone()];
+        let group_graph = build_subgraph_graph(graph, &node_ids);
+        let layout = layout_flowchart_flat(&group_graph, style, None);
+        let padding_x = 0.0;
+        let padding_y = 0.0;
+        let title_height = 0.0;
+        let width = layout.width;
+        let height = layout.height;
+        let group_index = group_nodes.len();
+        node_to_group.insert(node.id.clone(), group_index);
+        group_nodes.push(GroupLayout {
+            id: format!("__group_{}", node.id),
+            title: None,
+            node_ids,
+            layout,
+            width,
+            height,
+            padding_x,
+            padding_y,
+            title_height,
+            is_virtual: true,
+        });
+    }
+
+    let super_layout = build_super_layout_row(&group_nodes, style);
+
+    let mut global_nodes: Vec<LayoutNode> = Vec::new();
+    let mut node_lookup: HashMap<String, LayoutNode> = HashMap::new();
+    let mut global_edges: Vec<LayoutEdge> = Vec::new();
+    let mut subgraphs: Vec<LayoutSubgraph> = Vec::new();
+
+    for group in group_nodes.iter() {
+        let super_node = find_layout_node(&super_layout, &group.id);
+        if let Some(node) = super_node {
+            let left = node.x - group.width / 2.0;
+            let top = node.y - group.height / 2.0;
+            let offset_x = left + group.padding_x;
+            let offset_y = top + group.padding_y + group.title_height;
+
+            for mut node in group.layout.nodes.clone() {
+                node.x += offset_x;
+                node.y += offset_y;
+                node_lookup.insert(node.id.clone(), node.clone());
+                global_nodes.push(node);
+            }
+
+            for mut edge in group.layout.edges.clone() {
+                edge.points = edge
+                    .points
+                    .into_iter()
+                    .map(|(x, y)| (x + offset_x, y + offset_y))
+                    .collect();
+                global_edges.push(edge);
+            }
+
+            if !group.is_virtual {
+                subgraphs.push(LayoutSubgraph {
+                    id: group.id.clone(),
+                    title: group.title.clone(),
+                    nodes: group.node_ids.clone(),
+                    subgraphs: Vec::new(),
+                });
+            }
+        }
+    }
+
+    // Cross-group edges routed above the top row
+    let mut cross_edges = Vec::new();
+    let mut cross_edge_keys: HashSet<(String, String, Option<String>)> = HashSet::new();
+    for edge in &graph.edges {
+        let from_group = node_to_group.get(&edge.from).copied();
+        let to_group = node_to_group.get(&edge.to).copied();
+        if from_group.is_none() || to_group.is_none() {
+            continue;
+        }
+        if from_group == to_group && edge.from != edge.to {
+            continue;
+        }
+        let from_node = node_lookup.get(&edge.from);
+        let to_node = node_lookup.get(&edge.to);
+        if let Some(from_node) = from_node {
+            if edge.from == edge.to {
+                continue;
+            } else if let Some(to_node) = to_node {
+                let key = (edge.from.clone(), edge.to.clone(), edge.label.clone());
+                if !cross_edge_keys.insert(key) {
+                    continue;
+                }
+                let forward = match graph.direction {
+                    Direction::TB | Direction::BT => from_node.x <= to_node.x,
+                    Direction::LR | Direction::RL => from_node.y <= to_node.y,
+                };
+                cross_edges.push(CrossEdge {
+                    edge: edge.clone(),
+                    from: from_node.clone(),
+                    to: to_node.clone(),
+                    forward,
+                });
+            }
+        }
+    }
+
+    let cross_edge_count = cross_edges.len();
+
+    let (start_offsets, end_offsets) =
+        compute_cross_edge_ports(&cross_edges, graph.direction.clone(), style);
+
+    let mut forward_indices: Vec<usize> = cross_edges
+        .iter()
+        .enumerate()
+        .filter(|(_, edge)| edge.forward)
+        .map(|(idx, _)| idx)
+        .collect();
+    let mut backward_indices: Vec<usize> = cross_edges
+        .iter()
+        .enumerate()
+        .filter(|(_, edge)| !edge.forward)
+        .map(|(idx, _)| idx)
+        .collect();
+
+    forward_indices.sort_by(|a, b| {
+        let left = &cross_edges[*a];
+        let right = &cross_edges[*b];
+        left.from
+            .x
+            .partial_cmp(&right.from.x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left.to
+                    .x
+                    .partial_cmp(&right.to.x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    backward_indices.sort_by(|a, b| {
+        let left = &cross_edges[*a];
+        let right = &cross_edges[*b];
+        right
+            .from
+            .x
+            .partial_cmp(&left.from.x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                right
+                    .to
+                    .x
+                    .partial_cmp(&left.to.x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    let (band_top_start, band_bottom_start, band_gap, shift_y) = compute_cross_edge_bands(
+        &super_layout,
+        style,
+        forward_indices.len(),
+        backward_indices.len(),
+    );
+    if shift_y != 0.0 {
+        for node in &mut global_nodes {
+            node.y += shift_y;
+        }
+        for edge in &mut global_edges {
+            edge.points = edge.points.iter().map(|(x, y)| (*x, *y + shift_y)).collect();
+        }
+        for edge in &mut cross_edges {
+            edge.from.y += shift_y;
+            edge.to.y += shift_y;
+        }
+    }
+
+    let mut band_top = band_top_start + shift_y;
+    let band_bottom = band_bottom_start + shift_y;
+    if forward_indices.is_empty() && !backward_indices.is_empty() {
+        band_top = band_bottom;
+    }
+
+    let forward_count = forward_indices.len();
+    let backward_count = backward_indices.len();
+
+    for (lane_index, edge_index) in forward_indices.iter().enumerate() {
+        let edge_index = *edge_index;
+        let edge = &cross_edges[edge_index];
+        let band_y = band_top + band_gap * lane_index as f32;
+        let start_offset = start_offsets.get(&edge_index).copied().unwrap_or(0.0);
+        let end_offset = end_offsets.get(&edge_index).copied().unwrap_or(0.0);
+        let points = route_cross_edge_band(
+            &edge.from,
+            &edge.to,
+            graph.direction.clone(),
+            band_y,
+            start_offset,
+            end_offset,
+        );
+        global_edges.push(LayoutEdge {
+            from: edge.edge.from.clone(),
+            to: edge.edge.to.clone(),
+            is_cross: true,
+            label: edge.edge.label.clone(),
+            style: edge.edge.style.clone(),
+            arrow: edge.edge.arrow.clone(),
+            reversed: false,
+            points,
+        });
+    }
+
+    for (lane_index, edge_index) in backward_indices.iter().enumerate() {
+        let edge_index = *edge_index;
+        let edge = &cross_edges[edge_index];
+        let band_y = band_bottom + band_gap * lane_index as f32;
+        let start_offset = start_offsets.get(&edge_index).copied().unwrap_or(0.0);
+        let end_offset = end_offsets.get(&edge_index).copied().unwrap_or(0.0);
+        let points = route_cross_edge_band(
+            &edge.from,
+            &edge.to,
+            graph.direction.clone(),
+            band_y,
+            start_offset,
+            end_offset,
+        );
+        global_edges.push(LayoutEdge {
+            from: edge.edge.from.clone(),
+            to: edge.edge.to.clone(),
+            is_cross: true,
+            label: edge.edge.label.clone(),
+            style: edge.edge.style.clone(),
+            arrow: edge.edge.arrow.clone(),
+            reversed: false,
+            points,
+        });
+    }
+
+    let band_bottom_extent = if backward_count > 0 {
+        band_bottom + band_gap * (backward_count as f32 - 1.0)
+    } else if forward_count > 0 {
+        band_top + band_gap * (forward_count as f32 - 1.0)
+    } else {
+        band_top
+    };
+
+    let (width, height) = compute_group_extent(
+        &group_nodes,
+        &super_layout,
+        band_top,
+        band_bottom_extent,
+        shift_y,
+        cross_edge_count,
+        band_gap,
+    );
+
+    LayoutGraph {
+        nodes: global_nodes,
+        edges: global_edges,
+        subgraphs,
+        width,
+        height,
+    }
+}
+
 fn build_layout_subgraph(subgraph: &Subgraph) -> LayoutSubgraph {
     LayoutSubgraph {
         id: subgraph.id.clone(),
@@ -258,6 +603,307 @@ fn collect_group_paths(
         }
         collect_group_paths(&subgraph.subgraphs, prefix, map);
         prefix.pop();
+    }
+}
+
+fn collect_subgraph_nodes(subgraph: &Subgraph, out: &mut Vec<String>) {
+    for node_id in &subgraph.nodes {
+        out.push(node_id.clone());
+    }
+    for child in &subgraph.subgraphs {
+        collect_subgraph_nodes(child, out);
+    }
+}
+
+fn build_subgraph_graph(graph: &Graph, node_ids: &[String]) -> Graph {
+    let mut set = HashSet::new();
+    for id in node_ids {
+        set.insert(id.clone());
+    }
+
+    let mut subgraph = Graph::new(graph.direction.clone());
+    for node in &graph.nodes {
+        if set.contains(&node.id) {
+            subgraph.nodes.push(node.clone());
+        }
+    }
+    for edge in &graph.edges {
+        if set.contains(&edge.from) && set.contains(&edge.to) {
+            subgraph.edges.push(edge.clone());
+        }
+    }
+    subgraph
+}
+
+fn find_layout_node<'a>(layout: &'a LayoutGraph, id: &str) -> Option<&'a LayoutNode> {
+    layout.nodes.iter().find(|node| node.id == id)
+}
+
+fn build_super_layout_row(groups: &[GroupLayout], style: &LayoutStyle) -> LayoutGraph {
+    let mut nodes = Vec::new();
+    let mut x = 0.0f32;
+    let gap = style.node_gap * 2.0;
+    let mut max_height = 0.0f32;
+
+    for group in groups {
+        let center_x = x + group.width / 2.0;
+        let center_y = group.height / 2.0;
+        nodes.push(LayoutNode {
+            id: group.id.clone(),
+            label: group.title.clone(),
+            width: group.width,
+            height: group.height,
+            layer: 0,
+            order: 0,
+            x: center_x,
+            y: center_y,
+            is_dummy: false,
+            shape: NodeShape::Plain,
+        });
+        x += group.width + gap;
+        max_height = max_height.max(group.height);
+    }
+
+    let width = if nodes.is_empty() { 0.0 } else { x - gap };
+    let height = max_height;
+
+    LayoutGraph {
+        nodes,
+        edges: Vec::new(),
+        subgraphs: Vec::new(),
+        width,
+        height,
+    }
+}
+
+fn route_cross_edge_band(
+    from: &LayoutNode,
+    to: &LayoutNode,
+    direction: Direction,
+    band_y: f32,
+    start_offset: f32,
+    end_offset: f32,
+) -> Vec<(f32, f32)> {
+    let mut points = Vec::new();
+    match direction {
+        Direction::TB | Direction::BT => {
+            let start = (from.x + start_offset, from.y - from.height / 2.0);
+            let end = (to.x + end_offset, to.y - to.height / 2.0);
+            push_point(&mut points, start);
+            push_point(&mut points, (start.0, band_y));
+            push_point(&mut points, (end.0, band_y));
+            push_point(&mut points, end);
+        }
+        Direction::LR | Direction::RL => {
+            let start = (from.x - from.width / 2.0, from.y + start_offset);
+            let end = (to.x - to.width / 2.0, to.y + end_offset);
+            push_point(&mut points, start);
+            push_point(&mut points, (band_y, start.1));
+            push_point(&mut points, (band_y, end.1));
+            push_point(&mut points, end);
+        }
+    }
+    points
+}
+
+fn compute_cross_edge_bands(
+    super_layout: &LayoutGraph,
+    style: &LayoutStyle,
+    forward_count: usize,
+    backward_count: usize,
+) -> (f32, f32, f32, f32) {
+    let mut min_top = 0.0f32;
+    for node in &super_layout.nodes {
+        let top = node.y - node.height / 2.0;
+        min_top = min_top.min(top);
+    }
+    let band_gap = (style.char_height + style.node_padding_y * 2.0).max(24.0);
+    let total = forward_count + backward_count;
+    if total == 0 {
+        return (min_top, min_top, band_gap, 0.0);
+    }
+
+    let band_top_start = min_top - band_gap * total as f32 - style.node_padding_y;
+    let band_bottom_start = band_top_start + band_gap * forward_count as f32;
+    let shift_y = if band_top_start < 0.0 { -band_top_start } else { 0.0 };
+    (band_top_start, band_bottom_start, band_gap, shift_y)
+}
+
+fn compute_group_extent(
+    groups: &[GroupLayout],
+    super_layout: &LayoutGraph,
+    band_top: f32,
+    band_bottom: f32,
+    shift_y: f32,
+    cross_edge_count: usize,
+    band_gap: f32,
+) -> (f32, f32) {
+    let mut max_x = 0.0f32;
+    let mut max_y = 0.0f32;
+    for group in groups {
+        if let Some(node) = find_layout_node(super_layout, &group.id) {
+            let right = node.x + group.width / 2.0;
+            let bottom = node.y + group.height / 2.0 + shift_y;
+            max_x = max_x.max(right);
+            max_y = max_y.max(bottom);
+        }
+    }
+    let base_top = if cross_edge_count > 0 {
+        band_top - band_gap * 1.5
+    } else {
+        band_top
+    };
+    let min_y = base_top.min(0.0);
+    let max_y = max_y.max(band_bottom);
+    let height = max_y - min_y;
+    (max_x, height)
+}
+
+fn compute_cross_edge_ports(
+    cross_edges: &[CrossEdge],
+    direction: Direction,
+    style: &LayoutStyle,
+) -> (HashMap<usize, f32>, HashMap<usize, f32>) {
+    let mut outgoing: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut incoming: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut nodes: HashMap<String, LayoutNode> = HashMap::new();
+
+    for (idx, edge) in cross_edges.iter().enumerate() {
+        outgoing.entry(edge.from.id.clone()).or_default().push(idx);
+        incoming.entry(edge.to.id.clone()).or_default().push(idx);
+        nodes.entry(edge.from.id.clone()).or_insert_with(|| edge.from.clone());
+        nodes.entry(edge.to.id.clone()).or_insert_with(|| edge.to.clone());
+    }
+
+    let mut start_offsets = HashMap::new();
+    let mut end_offsets = HashMap::new();
+
+    for (node_id, edge_indices) in outgoing {
+        if let Some(node) = nodes.get(&node_id) {
+            assign_cross_edge_offsets(
+                node,
+                &edge_indices,
+                cross_edges,
+                direction.clone(),
+                style,
+                true,
+                &mut start_offsets,
+            );
+        }
+    }
+
+    for (node_id, edge_indices) in incoming {
+        if let Some(node) = nodes.get(&node_id) {
+            assign_cross_edge_offsets(
+                node,
+                &edge_indices,
+                cross_edges,
+                direction.clone(),
+                style,
+                false,
+                &mut end_offsets,
+            );
+        }
+    }
+
+    (start_offsets, end_offsets)
+}
+
+fn assign_cross_edge_offsets(
+    node: &LayoutNode,
+    edge_indices: &[usize],
+    cross_edges: &[CrossEdge],
+    direction: Direction,
+    style: &LayoutStyle,
+    outgoing: bool,
+    out: &mut HashMap<usize, f32>,
+) {
+    if edge_indices.is_empty() {
+        return;
+    }
+
+    let mut sorted = edge_indices.to_vec();
+    sorted.sort_by(|a, b| {
+        let a_node = if outgoing {
+            &cross_edges[*a].to
+        } else {
+            &cross_edges[*a].from
+        };
+        let b_node = if outgoing {
+            &cross_edges[*b].to
+        } else {
+            &cross_edges[*b].from
+        };
+        match direction {
+            Direction::TB | Direction::BT => a_node
+                .x
+                .partial_cmp(&b_node.x)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            Direction::LR | Direction::RL => a_node
+                .y
+                .partial_cmp(&b_node.y)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        }
+    });
+
+    let max_offset = match direction {
+        Direction::TB | Direction::BT => {
+            (node.width / 2.0 - style.node_padding_x).max(style.char_width)
+        }
+        Direction::LR | Direction::RL => {
+            (node.height / 2.0 - style.node_padding_y).max(style.char_height)
+        }
+    };
+
+    let n = sorted.len();
+    if n == 1 {
+        out.insert(sorted[0], 0.0);
+        return;
+    }
+
+    let span = max_offset * 2.0;
+    let step = span / (n as f32 - 1.0);
+    for (i, edge_idx) in sorted.into_iter().enumerate() {
+        let offset = -max_offset + step * i as f32;
+        out.insert(edge_idx, offset);
+    }
+}
+
+fn adjust_node_sizes_for_ports(
+    nodes: &mut [WorkNode],
+    edges: &[EdgeMeta],
+    style: &LayoutStyle,
+    direction: Direction,
+) {
+    let mut outgoing = vec![0usize; nodes.len()];
+    let mut incoming = vec![0usize; nodes.len()];
+    for edge in edges {
+        outgoing[edge.from] += 1;
+        incoming[edge.to] += 1;
+    }
+
+    let port_gap = style.char_width.max(6.0) * 2.0;
+    let port_gap_v = style.char_height.max(10.0) * 1.2;
+
+    for (idx, node) in nodes.iter_mut().enumerate() {
+        if node.is_dummy {
+            continue;
+        }
+        let ports = outgoing[idx].max(incoming[idx]).max(1) as f32;
+        match direction {
+            Direction::TB | Direction::BT => {
+                let min_width = (ports - 1.0) * port_gap + style.node_padding_x * 2.0 + style.char_width;
+                if node.width < min_width {
+                    node.width = min_width;
+                }
+            }
+            Direction::LR | Direction::RL => {
+                let min_height = (ports - 1.0) * port_gap_v + style.node_padding_y * 2.0 + style.char_height;
+                if node.height < min_height {
+                    node.height = min_height;
+                }
+            }
+        }
     }
 }
 
@@ -362,12 +1008,6 @@ fn make_acyclic(edges: &mut [EdgeMeta], node_count: usize) {
             dfs_cycle_break(node, &adjacency, edges, &mut state);
         }
     }
-
-    for edge in edges.iter_mut() {
-        if edge.reversed {
-            std::mem::swap(&mut edge.from, &mut edge.to);
-        }
-    }
 }
 
 fn dfs_cycle_break(
@@ -400,6 +1040,9 @@ fn assign_layers(nodes: &mut [WorkNode], edges: &[EdgeMeta]) {
     let mut outgoing = vec![Vec::new(); node_count];
 
     for edge in edges {
+        if edge.reversed {
+            continue;
+        }
         outgoing[edge.from].push(edge.to);
         indegree[edge.to] += 1;
     }
@@ -746,19 +1389,79 @@ fn route_edges(
 ) -> Vec<LayoutEdge> {
     let mut layout_edges = Vec::new();
     let lane_offsets = build_edge_lane_offsets(nodes, edges, direction.clone(), style);
+    let (start_offsets, end_offsets) = build_edge_port_offsets(nodes, edges, direction.clone(), style);
     for chain in chains {
         let edge = &edges[chain.edge_index];
+        if edge.orig_from == edge.orig_to {
+            let points = match direction {
+                Direction::TB | Direction::BT => route_self_loop_tb(&nodes[edge.orig_from], style),
+                Direction::LR | Direction::RL => route_self_loop_lr(&nodes[edge.orig_from], style),
+            };
+            layout_edges.push(LayoutEdge {
+                from: nodes[edge.orig_from].id.clone(),
+                to: nodes[edge.orig_to].id.clone(),
+                is_cross: false,
+                label: edge.label.clone(),
+                style: edge.style.clone(),
+                arrow: edge.arrow.clone(),
+                reversed: edge.reversed,
+                points,
+            });
+            continue;
+        }
+        if edge.from == edge.to {
+            let points = match direction {
+                Direction::TB | Direction::BT => route_self_loop_tb(&nodes[edge.from], style),
+                Direction::LR | Direction::RL => route_self_loop_lr(&nodes[edge.from], style),
+            };
+            layout_edges.push(LayoutEdge {
+                from: nodes[edge.orig_from].id.clone(),
+                to: nodes[edge.orig_to].id.clone(),
+                is_cross: false,
+                label: edge.label.clone(),
+                style: edge.style.clone(),
+                arrow: edge.arrow.clone(),
+                reversed: edge.reversed,
+                points,
+            });
+            continue;
+        }
         let lane_offset = lane_offsets
             .get(&chain.edge_index)
             .copied()
             .unwrap_or(0.0);
+        let start_offset = start_offsets
+            .get(&chain.edge_index)
+            .copied()
+            .unwrap_or(0.0);
+        let end_offset = end_offsets
+            .get(&chain.edge_index)
+            .copied()
+            .unwrap_or(0.0);
         let points = match direction {
-            Direction::TB | Direction::BT => route_chain_tb(nodes, &chain.nodes, lane_offset),
-            Direction::LR | Direction::RL => route_chain_lr(nodes, &chain.nodes, lane_offset),
+            Direction::TB | Direction::BT => route_chain_tb(
+                nodes,
+                &chain.nodes,
+                lane_offset,
+                start_offset,
+                end_offset,
+                edge.orig_from,
+                edge.orig_to,
+            ),
+            Direction::LR | Direction::RL => route_chain_lr(
+                nodes,
+                &chain.nodes,
+                lane_offset,
+                start_offset,
+                end_offset,
+                edge.orig_from,
+                edge.orig_to,
+            ),
         };
         layout_edges.push(LayoutEdge {
             from: nodes[edge.orig_from].id.clone(),
             to: nodes[edge.orig_to].id.clone(),
+            is_cross: false,
             label: edge.label.clone(),
             style: edge.style.clone(),
             arrow: edge.arrow.clone(),
@@ -769,13 +1472,59 @@ fn route_edges(
     layout_edges
 }
 
-fn route_chain_tb(nodes: &[WorkNode], chain: &[usize], lane_offset: f32) -> Vec<(f32, f32)> {
+fn route_self_loop_tb(node: &WorkNode, style: &LayoutStyle) -> Vec<(f32, f32)> {
+    let mut points = Vec::new();
+    let right = node.x + node.width / 2.0;
+    let loop_w = style.node_gap.max(style.char_width * 3.0);
+    let loop_h = (style.char_height * 1.5).max(style.node_padding_y * 2.0);
+    let start = (right, node.y);
+    push_point(&mut points, start);
+    push_point(&mut points, (right + loop_w, node.y));
+    push_point(&mut points, (right + loop_w, node.y - loop_h));
+    push_point(&mut points, (right, node.y - loop_h));
+    push_point(&mut points, (right, node.y));
+    points
+}
+
+fn route_self_loop_lr(node: &WorkNode, style: &LayoutStyle) -> Vec<(f32, f32)> {
+    let mut points = Vec::new();
+    let bottom = node.y + node.height / 2.0;
+    let loop_h = style.node_gap.max(style.char_height * 2.0);
+    let loop_w = (style.char_width * 1.5).max(style.node_padding_x * 2.0);
+    let start = (node.x, bottom);
+    push_point(&mut points, start);
+    push_point(&mut points, (node.x, bottom + loop_h));
+    push_point(&mut points, (node.x + loop_w, bottom + loop_h));
+    push_point(&mut points, (node.x + loop_w, bottom));
+    push_point(&mut points, (node.x, bottom));
+    points
+}
+
+fn route_chain_tb(
+    nodes: &[WorkNode],
+    chain: &[usize],
+    lane_offset: f32,
+    start_offset: f32,
+    end_offset: f32,
+    orig_from: usize,
+    orig_to: usize,
+) -> Vec<(f32, f32)> {
     let mut points = Vec::new();
     for pair in chain.windows(2) {
         let from = &nodes[pair[0]];
         let to = &nodes[pair[1]];
-        let start = (from.x, from.y + from.height / 2.0);
-        let end = (to.x, to.y - to.height / 2.0);
+        let start_x = if pair[0] == orig_from {
+            from.x + start_offset
+        } else {
+            from.x
+        };
+        let end_x = if pair[1] == orig_to {
+            to.x + end_offset
+        } else {
+            to.x
+        };
+        let start = (start_x, from.y + from.height / 2.0);
+        let end = (end_x, to.y - to.height / 2.0);
         let mid_y = (start.1 + end.1) / 2.0 + lane_offset;
         push_point(&mut points, start);
         if (start.0 - end.0).abs() < 0.01 {
@@ -789,13 +1538,31 @@ fn route_chain_tb(nodes: &[WorkNode], chain: &[usize], lane_offset: f32) -> Vec<
     points
 }
 
-fn route_chain_lr(nodes: &[WorkNode], chain: &[usize], lane_offset: f32) -> Vec<(f32, f32)> {
+fn route_chain_lr(
+    nodes: &[WorkNode],
+    chain: &[usize],
+    lane_offset: f32,
+    start_offset: f32,
+    end_offset: f32,
+    orig_from: usize,
+    orig_to: usize,
+) -> Vec<(f32, f32)> {
     let mut points = Vec::new();
     for pair in chain.windows(2) {
         let from = &nodes[pair[0]];
         let to = &nodes[pair[1]];
-        let start = (from.x + from.width / 2.0, from.y);
-        let end = (to.x - to.width / 2.0, to.y);
+        let start_y = if pair[0] == orig_from {
+            from.y + start_offset
+        } else {
+            from.y
+        };
+        let end_y = if pair[1] == orig_to {
+            to.y + end_offset
+        } else {
+            to.y
+        };
+        let start = (from.x + from.width / 2.0, start_y);
+        let end = (to.x - to.width / 2.0, end_y);
         let mid_x = (start.0 + end.0) / 2.0 + lane_offset;
         push_point(&mut points, start);
         if (start.1 - end.1).abs() < 0.01 {
@@ -815,18 +1582,14 @@ fn build_edge_lane_offsets(
     direction: Direction,
     style: &LayoutStyle,
 ) -> HashMap<usize, f32> {
+    let layer_bounds = compute_layer_bounds(nodes, direction.clone());
     let mut by_from: HashMap<usize, Vec<usize>> = HashMap::new();
     for (idx, edge) in edges.iter().enumerate() {
         by_from.entry(edge.from).or_default().push(idx);
     }
 
-    let lane_gap = match direction {
-        Direction::TB | Direction::BT => style.char_height.max(10.0) * 1.2,
-        Direction::LR | Direction::RL => style.char_width.max(6.0) * 2.0,
-    };
-
     let mut offsets = HashMap::new();
-    for (_from, mut edge_indices) in by_from {
+    for (from_idx, mut edge_indices) in by_from {
         edge_indices.sort_by(|a, b| match direction {
             Direction::TB | Direction::BT => nodes[edges[*a].to]
                 .x
@@ -839,18 +1602,272 @@ fn build_edge_lane_offsets(
         });
 
         let n = edge_indices.len();
-        if n == 1 {
-            offsets.insert(edge_indices[0], 0.0);
+        let from_layer = nodes[from_idx].layer;
+        let bounds = layer_bounds.get(from_layer);
+        if n == 1 || bounds.is_none() {
+            for edge_idx in edge_indices {
+                offsets.insert(edge_idx, 0.0);
+            }
             continue;
         }
-        let center = (n as f32 - 1.0) / 2.0;
+
+        let (_layer_min, layer_max) = bounds.unwrap();
+        let next_top = layer_bounds
+            .get(from_layer + 1)
+            .map(|(min, _)| *min)
+            .unwrap_or(layer_max + style.layer_gap.max(24.0));
+        let gap = (next_top - layer_max).max(style.layer_gap.max(24.0));
+
         for (i, edge_idx) in edge_indices.into_iter().enumerate() {
-            let offset = (i as f32 - center) * lane_gap;
+            let offset = match direction {
+                Direction::TB | Direction::BT => {
+                    let start = nodes[edges[edge_idx].from].y
+                        + nodes[edges[edge_idx].from].height / 2.0;
+                    let end = nodes[edges[edge_idx].to].y
+                        - nodes[edges[edge_idx].to].height / 2.0;
+                    let mid_y = (start + end) / 2.0;
+                    let lane_y = layer_max + gap * ((i + 1) as f32) / ((n + 1) as f32);
+                    lane_y - mid_y
+                }
+                Direction::LR | Direction::RL => {
+                    let start = nodes[edges[edge_idx].from].x
+                        + nodes[edges[edge_idx].from].width / 2.0;
+                    let end = nodes[edges[edge_idx].to].x
+                        - nodes[edges[edge_idx].to].width / 2.0;
+                    let mid_x = (start + end) / 2.0;
+                    let lane_x = layer_max + gap * ((i + 1) as f32) / ((n + 1) as f32);
+                    lane_x - mid_x
+                }
+            };
             offsets.insert(edge_idx, offset);
         }
     }
 
     offsets
+}
+
+fn compute_layer_bounds(nodes: &[WorkNode], direction: Direction) -> Vec<(f32, f32)> {
+    let max_layer = nodes.iter().map(|node| node.layer).max().unwrap_or(0);
+    let mut bounds = vec![(f32::MAX, f32::MIN); max_layer + 1];
+    for node in nodes {
+        if node.is_dummy {
+            continue;
+        }
+        let (min_axis, max_axis) = match direction {
+            Direction::TB | Direction::BT => (
+                node.y - node.height / 2.0,
+                node.y + node.height / 2.0,
+            ),
+            Direction::LR | Direction::RL => (
+                node.x - node.width / 2.0,
+                node.x + node.width / 2.0,
+            ),
+        };
+        let entry = &mut bounds[node.layer];
+        entry.0 = entry.0.min(min_axis);
+        entry.1 = entry.1.max(max_axis);
+    }
+    for entry in &mut bounds {
+        if entry.0 == f32::MAX {
+            entry.0 = 0.0;
+            entry.1 = 0.0;
+        }
+    }
+    bounds
+}
+
+fn expand_layer_gaps(
+    nodes: &mut [WorkNode],
+    edges: &[EdgeMeta],
+    style: &LayoutStyle,
+    direction: Direction,
+) {
+    if nodes.is_empty() {
+        return;
+    }
+
+    let layer_bounds = compute_layer_bounds(nodes, direction.clone());
+    if layer_bounds.len() <= 1 {
+        return;
+    }
+
+    let layer_count = layer_bounds.len();
+    let mut offsets = vec![0.0f32; layer_count];
+    let lane_size = match direction {
+        Direction::TB | Direction::BT => (style.char_height + style.node_padding_y * 2.0).max(18.0),
+        Direction::LR | Direction::RL => (style.char_width + style.node_padding_x).max(10.0) * 1.5,
+    };
+
+    let mut outgoing_per_layer = vec![0usize; layer_count];
+    for edge in edges {
+        if edge.reversed {
+            continue;
+        }
+        let from_layer = nodes[edge.from].layer;
+        if from_layer < outgoing_per_layer.len() {
+            outgoing_per_layer[from_layer] += 1;
+        }
+    }
+
+    for layer in 0..layer_count.saturating_sub(1) {
+        let required = style.layer_gap
+            + (outgoing_per_layer[layer].saturating_sub(1) as f32) * lane_size * 0.7;
+
+        match direction {
+            Direction::TB | Direction::BT => {
+                let current_bottom = layer_bounds[layer].1 + offsets[layer];
+                let next_top = layer_bounds[layer + 1].0 + offsets[layer + 1];
+                let gap = next_top - current_bottom;
+                if gap < required {
+                    let delta = required - gap;
+                    for next in (layer + 1)..layer_count {
+                        offsets[next] += delta;
+                    }
+                }
+            }
+            Direction::LR | Direction::RL => {
+                let current_right = layer_bounds[layer].1 + offsets[layer];
+                let next_left = layer_bounds[layer + 1].0 + offsets[layer + 1];
+                let gap = next_left - current_right;
+                if gap < required {
+                    let delta = required - gap;
+                    for next in (layer + 1)..layer_count {
+                        offsets[next] += delta;
+                    }
+                }
+            }
+        }
+    }
+
+    for node in nodes {
+        let layer = node.layer;
+        if layer >= offsets.len() {
+            continue;
+        }
+        match direction {
+            Direction::TB | Direction::BT => node.y += offsets[layer],
+            Direction::LR | Direction::RL => node.x += offsets[layer],
+        }
+    }
+}
+
+fn build_edge_port_offsets(
+    nodes: &[WorkNode],
+    edges: &[EdgeMeta],
+    direction: Direction,
+    style: &LayoutStyle,
+) -> (HashMap<usize, f32>, HashMap<usize, f32>) {
+    let mut outgoing: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut incoming: HashMap<usize, Vec<usize>> = HashMap::new();
+
+    for (idx, edge) in edges.iter().enumerate() {
+        outgoing.entry(edge.from).or_default().push(idx);
+        incoming.entry(edge.to).or_default().push(idx);
+    }
+
+    let mut start_offsets = HashMap::new();
+    let mut end_offsets = HashMap::new();
+
+    for (node_idx, edge_indices) in outgoing {
+        assign_port_offsets(
+            nodes,
+            edges,
+            node_idx,
+            &edge_indices,
+            direction.clone(),
+            style,
+            true,
+            &mut start_offsets,
+        );
+    }
+
+    for (node_idx, edge_indices) in incoming {
+        assign_port_offsets(
+            nodes,
+            edges,
+            node_idx,
+            &edge_indices,
+            direction.clone(),
+            style,
+            false,
+            &mut end_offsets,
+        );
+    }
+
+    (start_offsets, end_offsets)
+}
+
+fn assign_port_offsets(
+    nodes: &[WorkNode],
+    edges: &[EdgeMeta],
+    node_idx: usize,
+    edge_indices: &[usize],
+    direction: Direction,
+    style: &LayoutStyle,
+    outgoing: bool,
+    out: &mut HashMap<usize, f32>,
+) {
+    if edge_indices.is_empty() {
+        return;
+    }
+
+    let mut sorted = edge_indices.to_vec();
+    sorted.sort_by(|a, b| {
+        let a_node = if outgoing { edges[*a].to } else { edges[*a].from };
+        let b_node = if outgoing { edges[*b].to } else { edges[*b].from };
+        match direction {
+            Direction::TB | Direction::BT => nodes[a_node]
+                .x
+                .partial_cmp(&nodes[b_node].x)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            Direction::LR | Direction::RL => nodes[a_node]
+                .y
+                .partial_cmp(&nodes[b_node].y)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        }
+    });
+
+    let max_offset = match direction {
+        Direction::TB | Direction::BT => {
+            (nodes[node_idx].width / 2.0 - style.node_padding_x).max(style.char_width)
+        }
+        Direction::LR | Direction::RL => {
+            (nodes[node_idx].height / 2.0 - style.node_padding_y).max(style.char_height)
+        }
+    };
+
+    let n = sorted.len();
+    if n == 1 {
+        out.insert(sorted[0], 0.0);
+        return;
+    }
+
+    let span = max_offset * 2.0;
+    let step = span / (n as f32 - 1.0);
+    for (i, edge_idx) in sorted.into_iter().enumerate() {
+        let offset = -max_offset + step * i as f32;
+        out.insert(edge_idx, offset);
+    }
+}
+
+fn compute_layer_gap(
+    nodes: &[WorkNode],
+    edges: &[EdgeMeta],
+    style: &LayoutStyle,
+    direction: Direction,
+) -> f32 {
+    let mut out_counts: HashMap<usize, usize> = HashMap::new();
+    for edge in edges {
+        let from_layer = nodes[edge.from].layer;
+        *out_counts.entry(from_layer).or_insert(0) += 1;
+    }
+    let max_lanes = out_counts.values().copied().max().unwrap_or(1).max(1);
+    let lane_size = match direction {
+        Direction::TB | Direction::BT => (style.char_height + style.node_padding_y * 2.0).max(18.0),
+        Direction::LR | Direction::RL => (style.char_width + style.node_padding_x).max(10.0) * 1.5,
+    };
+    let gap = style.layer_gap + (max_lanes.saturating_sub(1) as f32) * lane_size * 0.6;
+    gap.min(style.layer_gap * 4.0).max(style.layer_gap)
 }
 
 fn push_point(points: &mut Vec<(f32, f32)>, point: (f32, f32)) {
