@@ -7,6 +7,10 @@ use skia_safe::{
     PathBuilder, Point, FontHinting, font::Edging,
 };
 
+mod layout;
+
+pub use layout::{layout_flowchart_skia, SkiaLayoutOptions};
+
 #[derive(Debug, Clone, Copy)]
 pub struct SkiaColor(pub u8, pub u8, pub u8, pub u8);
 
@@ -162,7 +166,7 @@ fn clear_canvas(canvas: &Canvas, background: SkiaColor) {
     canvas.clear(Color::from_argb(background.3, background.0, background.1, background.2));
 }
 
-fn load_font(options: &SkiaRenderOptions) -> Result<Font, SkiaRenderError> {
+pub(crate) fn load_font(options: &SkiaRenderOptions) -> Result<Font, SkiaRenderError> {
     if let Some(path) = options.font_path.as_ref() {
         let data = fs::read(path).map_err(|err| {
             SkiaRenderError::FontLoadFailed(format!("failed to read font {path:?}: {err}"))
@@ -188,7 +192,7 @@ fn load_font(options: &SkiaRenderOptions) -> Result<Font, SkiaRenderError> {
     }
 }
 
-fn configure_font(font: &mut Font) {
+pub(crate) fn configure_font(font: &mut Font) {
     font.set_edging(Edging::SubpixelAntiAlias);
     font.set_hinting(FontHinting::Full);
     font.set_subpixel(true);
@@ -196,7 +200,7 @@ fn configure_font(font: &mut Font) {
     font.set_force_auto_hinting(true);
 }
 
-fn build_text_paint() -> Paint {
+pub(crate) fn build_text_paint() -> Paint {
     let mut paint = Paint::default();
     paint.set_color(Color::BLACK);
     paint.set_anti_alias(true);
@@ -505,6 +509,9 @@ fn draw_edges(
     paint.set_style(PaintStyle::Stroke);
     paint.set_color(Color::BLACK);
     paint.set_stroke_width(options.stroke_width);
+    paint.set_anti_alias(true);
+    paint.set_stroke_cap(skia_safe::paint::Cap::Round);
+    paint.set_stroke_join(skia_safe::paint::Join::Round);
 
     for edge in &layout.edges {
         draw_edge_path(canvas, edge, transform, &paint, options);
@@ -797,6 +804,7 @@ fn draw_arrowhead(canvas: &Canvas, edge: &LayoutEdge, transform: &Transform, opt
     let mut paint = Paint::default();
     paint.set_style(PaintStyle::Fill);
     paint.set_color(Color::BLACK);
+    paint.set_anti_alias(true);
 
     let mut builder = PathBuilder::new();
     builder.move_to(tip);
